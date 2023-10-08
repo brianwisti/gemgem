@@ -23,7 +23,7 @@ I'm driving this with [just](https://github.com/casey/just), but that's not nece
 Test:
 
 ```bash
-pygame -x
+pytest -x
 ```
 
 Check and lint:
