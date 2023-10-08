@@ -71,7 +71,7 @@ ROW_ABOVE_BOARD = BOARD_HEIGHT + 1
 
 # constants for direction values
 Direction = Enum("Direction", ["UP", "DOWN", "LEFT", "RIGHT"])
-BoardRects = Sequence[Sequence[pygame.Rect]]
+BoardRects = list[list[pygame.Rect]]
 ImageList = list[pygame.Surface]
 Position = tuple[int, int]
 
@@ -435,6 +435,134 @@ class GemGame:
                 )
                 self.board_rects[x].append(rect)
 
+    def animate_moving_gems(
+        self,
+        board: GameBoard,
+        gems: GemList,
+        points_text,
+        score: int,
+    ):
+        """Animates the moving gems and points text on the board"""
+        # pointsText is a dictionary with keys 'x', 'y', and 'points'
+        progress = 0  # progress at 0 represents beginning, 100 means finished.
+
+        while progress < 100:  # animation loop
+            self.display_surf.fill(BGCOLOR)
+            self.draw_board(board)
+
+            for gem in gems:  # Draw each gem.
+                self.draw_moving_gem(gem, progress)
+
+            self.draw_score(score)
+
+            for point_text in points_text:
+                points_surf = self.basic_font.render(
+                    str(point_text["points"]), 1, SCORECOLOR
+                )
+                points_rect = points_surf.get_rect()
+                points_rect.center = (point_text["x"], point_text["y"])
+                self.display_surf.blit(points_surf, points_rect)
+
+            pygame.display.update()
+            self.fps_clock.tick(FPS)
+            progress += MOVE_RATE
+
+    def draw_board(self, board: GameBoard):
+        """Draws the gems on the board using the board data structure."""
+        for x in range(BOARD_WIDTH):
+            for y in range(BOARD_HEIGHT):
+                pygame.draw.rect(
+                    self.display_surf, GRIDCOLOR, self.board_rects[x][y], 1
+                )
+                gem_to_draw = board[x][y]
+
+                if gem_to_draw != EMPTY_SPACE:
+                    self.display_surf.blit(
+                        self.gem_images[gem_to_draw], self.board_rects[x][y]
+                    )
+
+    def draw_moving_gem(self, gem: GemInfo, progress):
+        """
+        Draw a gem sliding in the direction that its 'direction' key indicates.
+
+        The progress parameter is a number from 0 (just starting) to 100 (slide complete).
+        """
+        movex = 0
+        movey = 0
+        progress *= 0.01
+
+        if gem.direction == Direction.UP:
+            movey = -int(progress * GEM_IMAGE_SIZE)
+        elif gem.direction == Direction.DOWN:
+            movey = int(progress * GEM_IMAGE_SIZE)
+        elif gem.direction == Direction.RIGHT:
+            movex = int(progress * GEM_IMAGE_SIZE)
+        elif gem.direction == Direction.LEFT:
+            movex = -int(progress * GEM_IMAGE_SIZE)
+
+        basex = gem.x
+        basey = gem.y
+
+        if basey == ROW_ABOVE_BOARD:
+            basey = -1
+
+        pixelx = XMARGIN + (basex * GEM_IMAGE_SIZE)
+        pixely = YMARGIN + (basey * GEM_IMAGE_SIZE)
+        rect = pygame.Rect(
+            (pixelx + movex, pixely + movey, GEM_IMAGE_SIZE, GEM_IMAGE_SIZE)
+        )
+        self.display_surf.blit(self.gem_images[gem.image_num], rect)
+
+    def draw_score(self, score):
+        """Draws the score text in the lower left corner of the screen."""
+        score_img = self.basic_font.render(str(score), 1, SCORECOLOR)
+        score_rect = score_img.get_rect()
+        score_rect.bottomleft = (10, WINDOW_HEIGHT - 6)
+        self.display_surf.blit(score_img, score_rect)
+
+    def fill_board_and_animate(self, board: GameBoard, points, score):
+        """
+        Fills the board with gems and animates their placement using existing animation functions.
+        """
+        drop_slots = board.get_drop_slots(self.gem_images)
+
+        while drop_slots != [[]] * BOARD_WIDTH:
+            # do the dropping animation as long as there are more gems to drop
+            moving_gems = board.get_dropping_gems()
+
+            for x, drop_slot in enumerate(drop_slots):
+                if len(drop_slot) != 0:
+                    # cause the lowest gem in each slot to begin moving in the DOWN direction
+                    moving_gems.append(
+                        GemInfo(
+                            image_num=drop_slot[0],
+                            x=x,
+                            y=ROW_ABOVE_BOARD,
+                        )
+                    )
+
+            board_copy = board.get_board_copy_minus_gems(moving_gems)
+            self.animate_moving_gems(
+                board_copy,
+                moving_gems,
+                points,
+                score,
+            )
+            board.move_gems(moving_gems)
+
+            # Make the next row of gems from the drop slots
+            # the lowest by deleting the previous lowest gems.
+            for x, drop_slot in enumerate(drop_slots):
+                if len(drop_slot) == 0:
+                    continue
+
+                board[x][0] = drop_slot[0]
+                del drop_slots[x][0]
+
+    def highlight_space(self, x: int, y: int):
+        """Highlights the space at the given x,y board coordinates"""
+        pygame.draw.rect(self.display_surf, HIGHLIGHTCOLOR, self.board_rects[x][y], 4)
+
 
 def main():
     """Initialize the game and start the main game loop."""
@@ -454,12 +582,7 @@ def run_game(gem_game: GemGame):
     # initalize the board
     game_board = GameBoard()
     score = 0
-    fill_board_and_animate(
-        game_board,
-        [],
-        score,
-        gem_game,
-    )  # Drop the initial gems.
+    gem_game.fill_board_and_animate(game_board, [], score)  # Drop the initial gems.
 
     # initialize variables for the start of a new game
     first_selected_gem = None
@@ -519,12 +642,11 @@ def run_game(gem_game: GemGame):
             board_copy = game_board.get_board_copy_minus_gems(
                 (first_swapping_gem, second_swapping_gem)
             )
-            animate_moving_gems(
+            gem_game.animate_moving_gems(
                 board_copy,
                 [first_swapping_gem, second_swapping_gem],
                 [],
                 score,
-                gem_game,
             )
 
             assert first_swapping_gem
@@ -543,12 +665,11 @@ def run_game(gem_game: GemGame):
             if not matched_gems:
                 # Was not a matching move; swap the gems back
                 gem_game.game_sounds.bad_swap.play()
-                animate_moving_gems(
+                gem_game.animate_moving_gems(
                     board_copy,
                     [first_swapping_gem, second_swapping_gem],
                     [],
                     score,
-                    gem_game,
                 )
                 game_board[first_swapping_gem.x][
                     first_swapping_gem.y
@@ -588,12 +709,7 @@ def run_game(gem_game: GemGame):
                     score += score_add
 
                     # Drop the new gems.
-                    fill_board_and_animate(
-                        game_board,
-                        points,
-                        score,
-                        gem_game,
-                    )
+                    gem_game.fill_board_and_animate(game_board, points, score)
 
                     # Check if there are any new matches.
                     matched_gems = game_board.find_matching_gems()
@@ -604,10 +720,10 @@ def run_game(gem_game: GemGame):
 
         # Draw the board.
         gem_game.display_surf.fill(BGCOLOR)
-        draw_board(game_board, gem_game)
+        gem_game.draw_board(game_board)
 
         if first_selected_gem is not None:
-            highlight_space(first_selected_gem["x"], first_selected_gem["y"], gem_game)
+            gem_game.highlight_space(first_selected_gem["x"], first_selected_gem["y"])
 
         if game_is_over:
             if click_continue_text_surf is None:
@@ -631,126 +747,9 @@ def run_game(gem_game: GemGame):
             # score drops over time
             score -= 1
             last_score_deduction = time.time()
-        draw_score(score, gem_game.display_surf, gem_game.basic_font)
+        gem_game.draw_score(score)
         pygame.display.update()
         gem_game.fps_clock.tick(FPS)
-
-
-def fill_board_and_animate(
-    board: GameBoard,
-    points,
-    score,
-    gem_game: GemGame,
-):
-    """
-    Fills the board with gems and animates their placement using existing animation functions.
-    """
-    drop_slots = board.get_drop_slots(gem_game.gem_images)
-
-    while drop_slots != [[]] * BOARD_WIDTH:
-        # do the dropping animation as long as there are more gems to drop
-        moving_gems = board.get_dropping_gems()
-
-        for x, drop_slot in enumerate(drop_slots):
-            if len(drop_slot) != 0:
-                # cause the lowest gem in each slot to begin moving in the DOWN direction
-                moving_gems.append(
-                    GemInfo(
-                        image_num=drop_slot[0],
-                        x=x,
-                        y=ROW_ABOVE_BOARD,
-                    )
-                )
-
-        board_copy = board.get_board_copy_minus_gems(moving_gems)
-        animate_moving_gems(
-            board_copy,
-            moving_gems,
-            points,
-            score,
-            gem_game,
-        )
-        board.move_gems(moving_gems)
-
-        # Make the next row of gems from the drop slots
-        # the lowest by deleting the previous lowest gems.
-        for x, drop_slot in enumerate(drop_slots):
-            if len(drop_slot) == 0:
-                continue
-
-            board[x][0] = drop_slot[0]
-            del drop_slots[x][0]
-
-
-def draw_moving_gem(gem: GemInfo, progress, gem_game: GemGame):
-    """
-    Draw a gem sliding in the direction that its 'direction' key indicates.
-
-    The progress parameter is a number from 0 (just starting) to 100 (slide complete).
-    """
-    movex = 0
-    movey = 0
-    progress *= 0.01
-
-    if gem.direction == Direction.UP:
-        movey = -int(progress * GEM_IMAGE_SIZE)
-    elif gem.direction == Direction.DOWN:
-        movey = int(progress * GEM_IMAGE_SIZE)
-    elif gem.direction == Direction.RIGHT:
-        movex = int(progress * GEM_IMAGE_SIZE)
-    elif gem.direction == Direction.LEFT:
-        movex = -int(progress * GEM_IMAGE_SIZE)
-
-    basex = gem.x
-    basey = gem.y
-
-    if basey == ROW_ABOVE_BOARD:
-        basey = -1
-
-    pixelx = XMARGIN + (basex * GEM_IMAGE_SIZE)
-    pixely = YMARGIN + (basey * GEM_IMAGE_SIZE)
-    rect = pygame.Rect((pixelx + movex, pixely + movey, GEM_IMAGE_SIZE, GEM_IMAGE_SIZE))
-    gem_game.display_surf.blit(gem_game.gem_images[gem.image_num], rect)
-
-
-def highlight_space(x: int, y: int, gem_game: GemGame):
-    """Highlights the space at the given x,y board coordinates"""
-    pygame.draw.rect(
-        gem_game.display_surf, HIGHLIGHTCOLOR, gem_game.board_rects[x][y], 4
-    )
-
-
-def animate_moving_gems(
-    board: GameBoard,
-    gems: GemList,
-    points_text,
-    score: int,
-    gem_game: GemGame,
-):
-    """Animates the moving gems and points text on the board"""
-    # pointsText is a dictionary with keys 'x', 'y', and 'points'
-    progress = 0  # progress at 0 represents beginning, 100 means finished.
-
-    while progress < 100:  # animation loop
-        gem_game.display_surf.fill(BGCOLOR)
-        draw_board(board, gem_game)
-
-        for gem in gems:  # Draw each gem.
-            draw_moving_gem(gem, progress, gem_game)
-
-        draw_score(score, gem_game.display_surf, gem_game.basic_font)
-
-        for point_text in points_text:
-            points_surf = gem_game.basic_font.render(
-                str(point_text["points"]), 1, SCORECOLOR
-            )
-            points_rect = points_surf.get_rect()
-            points_rect.center = (point_text["x"], point_text["y"])
-            gem_game.display_surf.blit(points_surf, points_rect)
-
-        pygame.display.update()
-        gem_game.fps_clock.tick(FPS)
-        progress += MOVE_RATE
 
 
 def check_for_gem_click(pos: Position, board_rects: BoardRects):
@@ -761,29 +760,6 @@ def check_for_gem_click(pos: Position, board_rects: BoardRects):
                 return {"x": x, "y": y}
 
     return None  # Click was not on the board.
-
-
-def draw_board(board: GameBoard, gem_game: GemGame):
-    """Draws the gems on the board using the board data structure."""
-    for x in range(BOARD_WIDTH):
-        for y in range(BOARD_HEIGHT):
-            pygame.draw.rect(
-                gem_game.display_surf, GRIDCOLOR, gem_game.board_rects[x][y], 1
-            )
-            gem_to_draw = board[x][y]
-
-            if gem_to_draw != EMPTY_SPACE:
-                gem_game.display_surf.blit(
-                    gem_game.gem_images[gem_to_draw], gem_game.board_rects[x][y]
-                )
-
-
-def draw_score(score, display_surf: pygame.Surface, basic_font: pygame.font.Font):
-    """Draws the score text in the lower left corner of the screen."""
-    score_img = basic_font.render(str(score), 1, SCORECOLOR)
-    score_rect = score_img.get_rect()
-    score_rect.bottomleft = (10, WINDOW_HEIGHT - 6)
-    display_surf.blit(score_img, score_rect)
 
 
 if __name__ == "__main__":
