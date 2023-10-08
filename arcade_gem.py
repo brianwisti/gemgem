@@ -33,10 +33,8 @@ COLOR_SELECTED_SQUARE = color.GRAPE
 
 # Identifies squares without a gem.
 EMPTY_SPACE = -1
-
-
-# Arbitrary noninteger representing above the board
-ROW_ABOVE_BOARD = "row above board"
+# Identify squares off the board.
+ROW_ABOVE_BOARD = -1
 
 GameBoard = list[list[int]]
 EMPTY_ROW: list[list] = [[]] * BOARD_WIDTH
@@ -52,7 +50,7 @@ class GemInfo:
     image_num: int
     x: int
     y: int
-    direction: Direction
+    direction: Direction = Direction.DOWN
 
 
 GemList = list[GemInfo]
@@ -62,13 +60,20 @@ class GemGame(arcade.Window):
     """Our custom game Window."""
 
     board: GameBoard
-    score: int
+    first_selected_gem: GemInfo | None = None
+    last_mouse_down_x: int | None = None
+    last_mouse_down_y: int | None = None
+    selection_sprite_list: arcade.SpriteList = arcade.SpriteList()
+    score: int = 0
+    game_is_over: bool = False
 
     def __init__(self):
         """Initialize the game window."""
-        super().__init__(WINDOW_WIDTH, WINDOW_HEIGHT, "Gem Game")
-        # Holds our gem images.
-        self.score = 0
+        super().__init__(
+            width=WINDOW_WIDTH,
+            height=WINDOW_HEIGHT,
+            title="Gem Game",
+        )
         self.board = get_blank_board()
         arcade.set_background_color(color.AMAZON)
 
@@ -112,6 +117,7 @@ class GemGame(arcade.Window):
                 del drop_slots[x][0]
 
         board_sprites = arcade.SpriteList()
+
         for row in range(BOARD_HEIGHT):
             for column in range(BOARD_WIDTH):
                 x = (
@@ -144,13 +150,41 @@ class GemGame(arcade.Window):
         """Called when the user presses a mouse button."""
         assert self.board
 
-        # Change the x/y screen coordinates to grid coordinates
-        column = x // (GEM_IMAGE_SIZE + BOARD_MARGIN)
-        row = y // (GEM_IMAGE_SIZE + BOARD_MARGIN)
+        if self.game_is_over:
+            return
 
-        logging.info(
-            "Click coordinates: (%s, %s). Grid coordinats: (%s, %s)", x, y, row, column
-        )
+        logging.info("Click: (%s, %s)", x, y)
+        self.last_mouse_down_x = x
+        self.last_mouse_down_y = y
+
+    def on_mouse_release(self, x, y, button, modifiers):
+        """Handle mouse button releases"""
+        # Check if the click was on the board
+        if (
+            BOARD_MARGIN <= x <= WINDOW_WIDTH - BOARD_MARGIN
+            and BOARD_MARGIN <= y <= WINDOW_HEIGHT - BOARD_MARGIN
+        ):
+            # Get grid coordinates of click
+            click_row = y // (GEM_IMAGE_SIZE + BOARD_MARGIN)
+            click_column = x // (GEM_IMAGE_SIZE + BOARD_MARGIN)
+            clicked_space = self.board[click_row][click_column]
+
+            # Ensure the click was on an occupied space
+            if clicked_space == EMPTY_SPACE:
+                return
+
+            selected_gem = GemInfo(image_num=clicked_space, x=click_column, y=click_row)
+
+            # Check if this is the first gem selected
+            if self.first_selected_gem is None:
+                self.first_selected_gem = selected_gem
+                logging.info("First gem selected: %s", self.first_selected_gem)
+                return
+
+            # Deselect if the gems are not adjacent.
+            if not get_swapping_gems(self.first_selected_gem, selected_gem):
+                self.first_selected_gem = None
+                return
 
 
 def get_blank_board() -> GameBoard:
@@ -253,6 +287,32 @@ def get_board_copy_minus_gems(board: GameBoard, gems: GemList):
             board_copy[gem.x][gem.y] = EMPTY_SPACE
 
     return board_copy
+
+
+def get_swapping_gems(first_gem: GemInfo, second_gem: GemInfo):
+    """Check if the gems are adjacent and can be swapped"""
+
+    if first_gem.x == second_gem.x + 1 and first_gem.y == second_gem.y:
+        first_gem.direction = Direction.LEFT
+        second_gem.direction = Direction.RIGHT
+        return True
+
+    if first_gem.x == second_gem.x - 1 and first_gem.y == second_gem.y:
+        first_gem.direction = Direction.RIGHT
+        second_gem.direction = Direction.LEFT
+        return True
+
+    if first_gem.y == second_gem.y + 1 and first_gem.x == second_gem.x:
+        first_gem.direction = Direction.UP
+        second_gem.direction = Direction.DOWN
+        return True
+
+    if first_gem.y == second_gem.y - 1 and first_gem.x == second_gem.x:
+        first_gem.direction = Direction.DOWN
+        second_gem.direction = Direction.UP
+        return True
+
+    return False
 
 
 def move_gems(board: GameBoard, moving_gems: GemList):
