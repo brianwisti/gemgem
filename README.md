@@ -1,6 +1,6 @@
 # GemGem
 
-For now just a refactoring of Al Sweigart's Bejeweled clone [`gemgem.py`][gemgem] so I can better understand what it's involved in a match-three game. The code version of taking something apart to see what makes it tick.
+For now just a refactoring of Al Sweigart's Bejeweled clone [`gemgem.py`][gemgem] so I can better understand what's involved in a match-three game. The code version of taking something apart to see what makes it tick.
 
 [gemgem]: https://inventwithpython.com/blog/2011/06/24/new-game-source-code-gemgem-a-bejeweled-clone/
 
