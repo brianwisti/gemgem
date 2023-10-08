@@ -1,4 +1,3 @@
 [tool.pylint."MESSAGES CONTROL"]
 good-names = [ "i", "x", "y"]
 unsafe-load-any-extensions = true
-max-args = 11

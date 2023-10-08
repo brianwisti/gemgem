@@ -20,7 +20,9 @@ import copy
 import random
 import sys
 import time
+from dataclasses import dataclass, field
 from enum import Enum
+from typing import Sequence
 
 import pygame
 
@@ -63,11 +65,375 @@ SCORECOLOR = BROWN  # color of the text for the player's score
 XMARGIN = int((WINDOW_WIDTH - GEM_IMAGE_SIZE * BOARD_WIDTH) / 2)
 YMARGIN = int((WINDOW_HEIGHT - GEM_IMAGE_SIZE * BOARD_HEIGHT) / 2)
 
-# constants for direction values
-Direction = Enum("Direction", ["UP", "DOWN", "LEFT", "RIGHT"])
 
 EMPTY_SPACE = -1  # an arbitrary, nonpositive value
-ROW_ABOVE_BOARD = "row above board"  # an arbitrary, noninteger value
+ROW_ABOVE_BOARD = BOARD_HEIGHT + 1
+
+# constants for direction values
+Direction = Enum("Direction", ["UP", "DOWN", "LEFT", "RIGHT"])
+BoardRects = Sequence[Sequence[pygame.Rect]]
+ImageList = list[pygame.Surface]
+Position = tuple[int, int]
+
+
+@dataclass
+class GemInfo:
+    """Describes a single gem and its movement."""
+
+    image_num: int
+    x: int
+    y: int
+    direction: Direction = Direction.DOWN
+
+    def is_adjacent_to(self, other: "GemInfo"):
+        """
+        Return True if adjacent to other gem.
+
+        A gem is adjacent if it is directly above, below, left, or right of the other gem.
+
+        Raises a ValueError when two gems occupy the same space.
+        """
+
+        if self.x == other.x and self.y == other.y:
+            return False
+
+        return ((self.x - other.x) ** 2 + (self.y - other.y) ** 2) ** 0.5 <= 1
+
+    def prepare_swap(self, other: "GemInfo"):
+        """Set each gem's direction to swap locations."""
+
+        if not self.is_adjacent_to(other):
+            raise ValueError("Gems must be adjacent")
+
+        if self.x > other.x and self.y == other.y:
+            self.direction = Direction.LEFT
+            other.direction = Direction.RIGHT
+        elif self.x < other.x and self.y == other.y:
+            self.direction = Direction.RIGHT
+            other.direction = Direction.LEFT
+        elif self.x == other.x and self.y < other.y:
+            self.direction = Direction.UP
+            other.direction = Direction.DOWN
+        elif self.x == other.x and self.y > other.y:
+            self.direction = Direction.DOWN
+            other.direction = Direction.UP
+
+
+GemList = Sequence[GemInfo]
+
+
+@dataclass
+class GameBoard:
+    """Manages location and relations of gems on the board."""
+
+    squares: list[list[int]] = field(default_factory=list)
+
+    def __post_init__(self):
+        """Fill squares if needed."""
+        if not self.squares:
+            self.squares = [[EMPTY_SPACE] * BOARD_HEIGHT for _ in range(BOARD_WIDTH)]
+
+    def __getitem__(self, index: int):
+        """Return first level of indexed values"""
+        return self.squares[index]
+
+    def __setitem__(self, index: int, value: list[int]):
+        """Assign first level of indexed values."""
+        self.squares[index] = value
+
+    def can_make_move(self):
+        """Return True if the board is in a state where a matching move can be made on it."""
+
+        # The patterns in oneOffPatterns represent gems that are configured
+        # in a way where it only takes one move to make a triplet.
+        one_off_patterns = (
+            ((0, 1), (1, 0), (2, 0)),
+            ((0, 1), (1, 1), (2, 0)),
+            ((0, 0), (1, 1), (2, 0)),
+            ((0, 1), (1, 0), (2, 1)),
+            ((0, 0), (1, 0), (2, 1)),
+            ((0, 0), (1, 1), (2, 1)),
+            ((0, 0), (0, 2), (0, 3)),
+            ((0, 0), (0, 1), (0, 3)),
+        )
+
+        # The x and y variables iterate over each space on the board.
+        # If we use + to represent the currently iterated space on the
+        # board, then this pattern: ((0,1), (1,0), (2,0))refers to identical
+        # gems being set up like this:
+        #
+        #     +A
+        #     B
+        #     C
+        #
+        # That is, gem A is offset from the + by (0,1), gem B is offset
+        # by (1,0), and gem C is offset by (2,0). In this case, gem A can
+        # be swapped to the left to form a vertical three-in-a-row triplet.
+        #
+        # There are eight possible ways for the gems to be one move
+        # away from forming a triple, hence oneOffPattern has 8 patterns.
+
+        for x in range(BOARD_WIDTH):
+            for y in range(BOARD_HEIGHT):
+                for pat in one_off_patterns:
+                    # check each possible pattern of "match in next move" to
+                    # see if a possible move can be made.
+                    if (
+                        self.get_gem_at(x + pat[0][0], y + pat[0][1])
+                        == self.get_gem_at(x + pat[1][0], y + pat[1][1])
+                        == self.get_gem_at(x + pat[2][0], y + pat[2][1])
+                        != None
+                    ) or (
+                        self.get_gem_at(x + pat[0][1], y + pat[0][0])
+                        == self.get_gem_at(x + pat[1][1], y + pat[1][0])
+                        == self.get_gem_at(x + pat[2][1], y + pat[2][0])
+                        != None
+                    ):
+                        return True  # return True the first time you find a pattern
+        return False
+
+    def find_matching_gems(self):
+        """Find sets of three or more matching gems and return them in a list."""
+        gems_to_remove = (
+            []
+        )  # a list of lists of gems in matching triplets that should be removed
+        board_copy = copy.deepcopy(self)
+
+        # loop through each space, checking for 3 adjacent identical gems
+        for x in range(BOARD_WIDTH):
+            for y in range(BOARD_HEIGHT):
+                # look for horizontal matches
+                if (
+                    self.get_gem_at(x, y)
+                    == self.get_gem_at(x + 1, y)
+                    == self.get_gem_at(x + 2, y)
+                    and self.get_gem_at(x, y) != EMPTY_SPACE
+                ):
+                    target_gem = board_copy[x][y]
+                    offset = 0
+                    remove_set = []
+
+                    while self.get_gem_at(x + offset, y) == target_gem:
+                        # keep checking if there's more than 3 gems in a row
+                        remove_set.append((x + offset, y))
+                        board_copy[x + offset][y] = EMPTY_SPACE
+                        offset += 1
+
+                    gems_to_remove.append(remove_set)
+
+                # look for vertical matches
+                if (
+                    self.get_gem_at(x, y)
+                    == self.get_gem_at(x, y + 1)
+                    == self.get_gem_at(x, y + 2)
+                    and self.get_gem_at(x, y) != EMPTY_SPACE
+                ):
+                    target_gem = board_copy[x][y]
+                    offset = 0
+                    remove_set = []
+
+                    while self.get_gem_at(x, y + offset) == target_gem:
+                        # keep checking, in case there's more than 3 gems in a row
+                        remove_set.append((x, y + offset))
+                        board_copy[x][y + offset] = EMPTY_SPACE
+                        offset += 1
+
+                    gems_to_remove.append(remove_set)
+
+        return gems_to_remove
+
+    def get_board_copy_minus_gems(self, gems: GemList):
+        """
+        Returns a copy of the passed board data structure without the gems in the "gems" list.
+        """
+        #
+        # Gems is a list of dicts, with keys x, y, direction, imageNum
+
+        board_copy = copy.deepcopy(self)
+
+        # Remove some of the gems from this board data structure copy.
+        for gem in gems:
+            if gem.y != ROW_ABOVE_BOARD:
+                board_copy[gem.x][gem.y] = EMPTY_SPACE
+
+        return board_copy
+
+    def get_drop_slots(self, gem_images: ImageList):
+        """
+        Creates a "drop slot" for each column, filled with gems that the column is lacking.
+
+        This function assumes that the gems have been gravity dropped already.
+        """
+        board_copy = copy.deepcopy(self)
+        board_copy.pull_down_all_gems()
+        drop_slots: list[list[int]] = []
+
+        for _ in range(BOARD_WIDTH):
+            drop_slots.append([])
+
+        # count the number of empty spaces in each column on the board
+        for x in range(BOARD_WIDTH):
+            for y in range(BOARD_HEIGHT - 1, -1, -1):  # start from bottom, going up
+                if board_copy[x][y] == EMPTY_SPACE:
+                    possible_gems = list(range(len(gem_images)))
+                    for offset_x, offset_y in ((0, -1), (1, 0), (0, 1), (-1, 0)):
+                        # Narrow down the possible gems we should put in the
+                        # blank space so we don't end up putting an two of
+                        # the same gems next to each other when they drop.
+                        neighbor_gem = self.get_gem_at(x + offset_x, y + offset_y)
+                        if neighbor_gem is not None and neighbor_gem in possible_gems:
+                            possible_gems.remove(neighbor_gem)
+
+                    new_gem = random.choice(possible_gems)
+                    board_copy[x][y] = new_gem
+                    drop_slots[x].append(new_gem)
+
+        return drop_slots
+
+    def get_dropping_gems(self):
+        """Find all the gems that have an empty space below them"""
+        board_copy = copy.deepcopy(self)
+        dropping_gems = []
+
+        for x in range(BOARD_WIDTH):
+            for y in range(BOARD_HEIGHT - 2, -1, -1):
+                if (
+                    board_copy[x][y + 1] == EMPTY_SPACE
+                    and board_copy[x][y] != EMPTY_SPACE
+                ):
+                    # This space drops if not empty but the space below it is
+                    dropping_gems.append(GemInfo(image_num=board_copy[x][y], x=x, y=y))
+                    board_copy[x][y] = EMPTY_SPACE
+
+        return dropping_gems
+
+    def get_gem_at(self, x: int, y: int):
+        """Return the gem image number stored at the given x, y coordinates of the board."""
+        if x < 0 or y < 0 or x >= BOARD_WIDTH or y >= BOARD_HEIGHT:
+            return None
+
+        return self.squares[x][y]
+
+    def get_swapping_gems(self, first_x_y, second_x_y):
+        """Check if the gems are adjacent and can be swapped"""
+        # If the gems at the (X, Y) coordinates of the two gems are adjacent,
+        # then their 'direction' keys are set to the appropriate direction
+        # value to be swapped with each other.
+        # Otherwise, (None, None) is returned.
+        first_gem = GemInfo(
+            image_num=self.squares[first_x_y["x"]][first_x_y["y"]],
+            x=first_x_y["x"],
+            y=first_x_y["y"],
+        )
+        second_gem = GemInfo(
+            image_num=self.squares[second_x_y["x"]][second_x_y["y"]],
+            x=second_x_y["x"],
+            y=second_x_y["y"],
+        )
+
+        if first_gem.is_adjacent_to(second_gem):
+            first_gem.prepare_swap(second_gem)
+            return first_gem, second_gem
+
+        # These gems are not adjacent and can't be swapped.
+        return None, None
+
+    def move_gems(self, moving_gems: GemList):
+        """Moves the gems on the board based on their direction property"""
+        # movingGems is a list of dicts with keys x, y, direction, imageNum
+        for gem in moving_gems:
+            if gem.y != ROW_ABOVE_BOARD:
+                self.squares[gem.x][gem.y] = EMPTY_SPACE
+                move_x = 0
+                move_y = 0
+
+                if gem.direction == Direction.LEFT:
+                    move_x = -1
+                elif gem.direction == Direction.RIGHT:
+                    move_x = 1
+                elif gem.direction == Direction.DOWN:
+                    move_y = 1
+                elif gem.direction == Direction.UP:
+                    move_y = -1
+
+                self.squares[gem.x + move_x][gem.y + move_y] = gem.image_num
+            else:
+                # gem is located above the board (where new gems come from)
+                self.squares[gem.x][0] = gem.image_num  # move to top row
+
+    def pull_down_all_gems(self):
+        """pulls down gems on the board to the bottom to fill in any gaps"""
+        for x in range(BOARD_WIDTH):
+            gems_in_column = []
+
+            for y in range(BOARD_HEIGHT):
+                if self.squares[x][y] != EMPTY_SPACE:
+                    gems_in_column.append(self.squares[x][y])
+            self.squares[x] = (
+                [EMPTY_SPACE] * (BOARD_HEIGHT - len(gems_in_column))
+            ) + gems_in_column
+
+
+@dataclass
+class GameSounds:
+    """Knows what sounds to play for particular situations."""
+
+    bad_swap: pygame.mixer.Sound = field(init=False)
+    match: Sequence[pygame.mixer.Sound] = field(init=False, default_factory=list)
+
+    def __post_init__(self):
+        self.bad_swap = pygame.mixer.Sound("badswap.wav")
+        # Load game sounds.
+        self.match = [
+            pygame.mixer.Sound(f"match{i}.wav") for i in range(NUM_MATCH_SOUNDS)
+        ]
+
+
+@dataclass
+class GemGame:
+    """Manages drawing the game itself."""
+
+    fps_clock: pygame.time.Clock = field(init=False)
+    display_surf: pygame.Surface = field(init=False)
+    basic_font: pygame.font.Font = field(init=False)
+    gem_images: list[pygame.Surface] = field(init=False, default_factory=list)
+    game_sounds: GameSounds = field(init=False, default_factory=GameSounds)
+    board_rects: BoardRects = field(init=False, default_factory=list)
+
+    def __post_init__(self):
+        """Initialize fields."""
+        self.fps_clock = pygame.time.Clock()
+        self.display_surf = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+        self.basic_font = pygame.font.Font("freesansbold.ttf", 36)
+
+        # Load gem images.
+        for i in range(1, NUM_GEM_IMAGES + 1):
+            gem_image = pygame.image.load(f"gem{i}.png")
+
+            if gem_image.get_size() != (GEM_IMAGE_SIZE, GEM_IMAGE_SIZE):
+                gem_image = pygame.transform.smoothscale(
+                    gem_image, (GEM_IMAGE_SIZE, GEM_IMAGE_SIZE)
+                )
+
+            self.gem_images.append(gem_image)
+
+        # Create pygame.Rect objects for each board space to
+        # do board-coordinate-to-pixel-coordinate conversions.
+        self.board_rects = []
+
+        for x in range(BOARD_WIDTH):
+            self.board_rects.append([])
+
+            for y in range(BOARD_HEIGHT):
+                rect = pygame.Rect(
+                    (
+                        XMARGIN + (x * GEM_IMAGE_SIZE),
+                        YMARGIN + (y * GEM_IMAGE_SIZE),
+                        GEM_IMAGE_SIZE,
+                        GEM_IMAGE_SIZE,
+                    )
+                )
+                self.board_rects[x].append(rect)
 
 
 def main():
@@ -75,83 +441,24 @@ def main():
 
     # Initial set up.
     pygame.init()
-    fps_clock = pygame.time.Clock()
-    display_surf = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    gem_game = GemGame()
     pygame.display.set_caption("Gemgem")
-    basic_font = pygame.font.Font("freesansbold.ttf", 36)
-
-    # Load the images
-    gem_images = []
-
-    for i in range(1, NUM_GEM_IMAGES + 1):
-        gem_image = pygame.image.load(f"gem{i}.png")
-
-        if gem_image.get_size() != (GEM_IMAGE_SIZE, GEM_IMAGE_SIZE):
-            gem_image = pygame.transform.smoothscale(
-                gem_image, (GEM_IMAGE_SIZE, GEM_IMAGE_SIZE)
-            )
-
-        gem_images.append(gem_image)
-
-    # Load the sounds.
-    game_sounds = {}
-    game_sounds["bad swap"] = pygame.mixer.Sound("badswap.wav")
-    game_sounds["match"] = []
-
-    for i in range(NUM_MATCH_SOUNDS):
-        game_sounds["match"].append(pygame.mixer.Sound(f"match{i}.wav"))
-
-    # Create pygame.Rect objects for each board space to
-    # do board-coordinate-to-pixel-coordinate conversions.
-    board_rects = []
-
-    for x in range(BOARD_WIDTH):
-        board_rects.append([])
-
-        for y in range(BOARD_HEIGHT):
-            rect = pygame.Rect(
-                (
-                    XMARGIN + (x * GEM_IMAGE_SIZE),
-                    YMARGIN + (y * GEM_IMAGE_SIZE),
-                    GEM_IMAGE_SIZE,
-                    GEM_IMAGE_SIZE,
-                )
-            )
-            board_rects[x].append(rect)
 
     while True:
-        run_game(
-            fps_clock, display_surf, gem_images, game_sounds, basic_font, board_rects
-        )
+        run_game(gem_game)
 
 
-def set_fps_clock():
-    """Initialize the FPS clock."""
-    return pygame.time.Clock()
-
-
-def run_game(
-    fps_clock: pygame.time.Clock,
-    display_surf: pygame.Surface,
-    gem_images,
-    game_sounds,
-    basic_font: pygame.font.Font,
-    board_rects,
-):
+def run_game(gem_game: GemGame):
     """Plays through a single game. When the game is over, this function returns."""
 
     # initalize the board
-    game_board = get_blank_board()
+    game_board = GameBoard()
     score = 0
     fill_board_and_animate(
         game_board,
         [],
         score,
-        display_surf,
-        fps_clock,
-        gem_images,
-        basic_font,
-        board_rects,
+        gem_game,
     )  # Drop the initial gems.
 
     # initialize variables for the start of a new game
@@ -179,13 +486,13 @@ def run_game(
 
                 if event.pos == (last_mouse_down_x, last_mouse_down_y):
                     # This event is a mouse click, not the end of a mouse drag.
-                    clicked_space = check_for_gem_click(event.pos, board_rects)
-                else:
+                    clicked_space = check_for_gem_click(event.pos, gem_game.board_rects)
+                elif last_mouse_down_x and last_mouse_down_y:
                     # this is the end of a mouse drag
                     first_selected_gem = check_for_gem_click(
-                        (last_mouse_down_x, last_mouse_down_y), board_rects
+                        (last_mouse_down_x, last_mouse_down_y), gem_game.board_rects
                     )
-                    clicked_space = check_for_gem_click(event.pos, board_rects)
+                    clicked_space = check_for_gem_click(event.pos, gem_game.board_rects)
                     if not first_selected_gem or not clicked_space:
                         # if not part of a valid drag, deselect both
                         first_selected_gem = None
@@ -199,8 +506,8 @@ def run_game(
             first_selected_gem = clicked_space
         elif clicked_space and first_selected_gem:
             # Two gems have been clicked on and selected. Swap the gems.
-            first_swapping_gem, second_swapping_gem = get_swapping_gems(
-                game_board, first_selected_gem, clicked_space
+            first_swapping_gem, second_swapping_gem = game_board.get_swapping_gems(
+                first_selected_gem, clicked_space
             )
 
             if first_swapping_gem is None and second_swapping_gem is None:
@@ -217,46 +524,38 @@ def run_game(
                 [first_swapping_gem, second_swapping_gem],
                 [],
                 score,
-                display_surf,
-                fps_clock,
-                gem_images,
-                basic_font,
-                board_rects,
+                gem_game,
             )
 
             assert first_swapping_gem
             assert second_swapping_gem
             # Swap the gems in the board data structure.
-            game_board[first_swapping_gem["x"]][
-                first_swapping_gem["y"]
-            ] = second_swapping_gem["imageNum"]
-            game_board[second_swapping_gem["x"]][
-                second_swapping_gem["y"]
-            ] = first_swapping_gem["imageNum"]
+            game_board[first_swapping_gem.x][
+                first_swapping_gem.y
+            ] = second_swapping_gem.image_num
+            game_board[second_swapping_gem.x][
+                second_swapping_gem.y
+            ] = first_swapping_gem.image_num
 
             # See if this is a matching move.
-            matched_gems = find_matching_gems(game_board)
+            matched_gems = game_board.find_matching_gems()
 
             if not matched_gems:
                 # Was not a matching move; swap the gems back
-                game_sounds["bad swap"].play()
+                gem_game.game_sounds.bad_swap.play()
                 animate_moving_gems(
                     board_copy,
                     [first_swapping_gem, second_swapping_gem],
                     [],
                     score,
-                    display_surf,
-                    fps_clock,
-                    gem_images,
-                    basic_font,
-                    board_rects,
+                    gem_game,
                 )
-                game_board[first_swapping_gem["x"]][
-                    first_swapping_gem["y"]
-                ] = first_swapping_gem["imageNum"]
-                game_board[second_swapping_gem["x"]][
-                    second_swapping_gem["y"]
-                ] = second_swapping_gem["imageNum"]
+                game_board[first_swapping_gem.x][
+                    first_swapping_gem.y
+                ] = second_swapping_gem.image_num
+                game_board[second_swapping_gem.x][
+                    second_swapping_gem.y
+                ] = first_swapping_gem.image_num
             else:
                 # This was a matching move.
                 score_add = 0
@@ -285,7 +584,7 @@ def run_game(
                                     "y": gem[1] * GEM_IMAGE_SIZE + YMARGIN,
                                 }
                             )
-                    random.choice(game_sounds["match"]).play()
+                    random.choice(gem_game.game_sounds.match).play()
                     score += score_add
 
                     # Drop the new gems.
@@ -293,37 +592,28 @@ def run_game(
                         game_board,
                         points,
                         score,
-                        display_surf,
-                        fps_clock,
-                        gem_images,
-                        basic_font,
-                        board_rects,
+                        gem_game,
                     )
 
                     # Check if there are any new matches.
-                    matched_gems = find_matching_gems(game_board)
+                    matched_gems = game_board.find_matching_gems()
             first_selected_gem = None
 
-            if not can_make_move(game_board):
+            if not game_board.can_make_move():
                 game_is_over = True
 
         # Draw the board.
-        display_surf.fill(BGCOLOR)
-        draw_board(game_board, display_surf, gem_images, board_rects)
+        gem_game.display_surf.fill(BGCOLOR)
+        draw_board(game_board, gem_game)
 
         if first_selected_gem is not None:
-            highlight_space(
-                first_selected_gem["x"],
-                first_selected_gem["y"],
-                display_surf,
-                board_rects,
-            )
+            highlight_space(first_selected_gem["x"], first_selected_gem["y"], gem_game)
 
         if game_is_over:
             if click_continue_text_surf is None:
                 # Only render the text once. In future iterations, just
                 # use the Surface object already in clickContinueTextSurf
-                click_continue_text_surf = basic_font.render(
+                click_continue_text_surf = gem_game.basic_font.render(
                     f"Final Score: {score} (Click to continue)",
                     1,
                     GAMEOVERCOLOR,
@@ -334,90 +624,42 @@ def run_game(
                     WINDOW_HEIGHT / 2
                 )
 
-            display_surf.blit(click_continue_text_surf, click_continue_text_rect)
+            gem_game.display_surf.blit(
+                click_continue_text_surf, click_continue_text_rect
+            )
         elif score > 0 and time.time() - last_score_deduction > DEDUCT_SPEED:
             # score drops over time
             score -= 1
             last_score_deduction = time.time()
-        draw_score(score, display_surf, basic_font)
+        draw_score(score, gem_game.display_surf, gem_game.basic_font)
         pygame.display.update()
-        fps_clock.tick(FPS)
-
-
-def get_swapping_gems(board, first_x_y, second_x_y):
-    """Check if the gems are adjacent and can be swapped"""
-    # If the gems at the (X, Y) coordinates of the two gems are adjacent,
-    # then their 'direction' keys are set to the appropriate direction
-    # value to be swapped with each other.
-    # Otherwise, (None, None) is returned.
-    first_gem = {
-        "imageNum": board[first_x_y["x"]][first_x_y["y"]],
-        "x": first_x_y["x"],
-        "y": first_x_y["y"],
-    }
-    second_gem = {
-        "imageNum": board[second_x_y["x"]][second_x_y["y"]],
-        "x": second_x_y["x"],
-        "y": second_x_y["y"],
-    }
-
-    if first_gem["x"] == second_gem["x"] + 1 and first_gem["y"] == second_gem["y"]:
-        first_gem["direction"] = Direction.LEFT
-        second_gem["direction"] = Direction.RIGHT
-    elif first_gem["x"] == second_gem["x"] - 1 and first_gem["y"] == second_gem["y"]:
-        first_gem["direction"] = Direction.RIGHT
-        second_gem["direction"] = Direction.LEFT
-    elif first_gem["y"] == second_gem["y"] + 1 and first_gem["x"] == second_gem["x"]:
-        first_gem["direction"] = Direction.UP
-        second_gem["direction"] = Direction.DOWN
-    elif first_gem["y"] == second_gem["y"] - 1 and first_gem["x"] == second_gem["x"]:
-        first_gem["direction"] = Direction.DOWN
-        second_gem["direction"] = Direction.UP
-    else:
-        # These gems are not adjacent and can't be swapped.
-        return None, None
-    return first_gem, second_gem
-
-
-def get_blank_board():
-    """Create and return a blank board data structure."""
-    board = []
-
-    for _ in range(BOARD_WIDTH):
-        board.append([EMPTY_SPACE] * BOARD_HEIGHT)
-
-    return board
+        gem_game.fps_clock.tick(FPS)
 
 
 def fill_board_and_animate(
-    board,
+    board: GameBoard,
     points,
     score,
-    display_surf: pygame.Surface,
-    fps_clock: pygame.time.Clock,
-    gem_images,
-    basic_font: pygame.font.Font,
-    board_rects,
+    gem_game: GemGame,
 ):
     """
     Fills the board with gems and animates their placement using existing animation functions.
     """
-    drop_slots = get_drop_slots(board, gem_images)
+    drop_slots = board.get_drop_slots(gem_game.gem_images)
 
     while drop_slots != [[]] * BOARD_WIDTH:
         # do the dropping animation as long as there are more gems to drop
-        moving_gems = get_dropping_gems(board)
+        moving_gems = board.get_dropping_gems()
 
         for x, drop_slot in enumerate(drop_slots):
             if len(drop_slot) != 0:
                 # cause the lowest gem in each slot to begin moving in the DOWN direction
                 moving_gems.append(
-                    {
-                        "imageNum": drop_slot[0],
-                        "x": x,
-                        "y": ROW_ABOVE_BOARD,
-                        "direction": Direction.DOWN,
-                    }
+                    GemInfo(
+                        image_num=drop_slot[0],
+                        x=x,
+                        y=ROW_ABOVE_BOARD,
+                    )
                 )
 
         board_copy = get_board_copy_minus_gems(board, moving_gems)
@@ -426,13 +668,9 @@ def fill_board_and_animate(
             moving_gems,
             points,
             score,
-            display_surf,
-            fps_clock,
-            gem_images,
-            basic_font,
-            board_rects,
+            gem_game,
         )
-        move_gems(board, moving_gems)
+        board.move_gems(moving_gems)
 
         # Make the next row of gems from the drop slots
         # the lowest by deleting the previous lowest gems.
@@ -444,106 +682,7 @@ def fill_board_and_animate(
             del drop_slots[x][0]
 
 
-def get_drop_slots(board, gem_images):
-    """
-    Creates a "drop slot" for each column, filled with gems that the column is lacking.
-
-    This function assumes that the gems have been gravity dropped already.
-    """
-    board_copy = copy.deepcopy(board)
-    pull_down_all_gems(board_copy)
-
-    drop_slots = []
-
-    for _ in range(BOARD_WIDTH):
-        drop_slots.append([])
-
-    # count the number of empty spaces in each column on the board
-    for x in range(BOARD_WIDTH):
-        for y in range(BOARD_HEIGHT - 1, -1, -1):  # start from bottom, going up
-            if board_copy[x][y] == EMPTY_SPACE:
-                possible_gems = list(range(len(gem_images)))
-                for offset_x, offset_y in ((0, -1), (1, 0), (0, 1), (-1, 0)):
-                    # Narrow down the possible gems we should put in the
-                    # blank space so we don't end up putting an two of
-                    # the same gems next to each other when they drop.
-                    neighbor_gem = get_gem_at(board_copy, x + offset_x, y + offset_y)
-                    if neighbor_gem is not None and neighbor_gem in possible_gems:
-                        possible_gems.remove(neighbor_gem)
-
-                new_gem = random.choice(possible_gems)
-                board_copy[x][y] = new_gem
-                drop_slots[x].append(new_gem)
-
-    return drop_slots
-
-
-def pull_down_all_gems(board):
-    """pulls down gems on the board to the bottom to fill in any gaps"""
-    for x in range(BOARD_WIDTH):
-        gems_in_column = []
-
-        for y in range(BOARD_HEIGHT):
-            if board[x][y] != EMPTY_SPACE:
-                gems_in_column.append(board[x][y])
-        board[x] = (
-            [EMPTY_SPACE] * (BOARD_HEIGHT - len(gems_in_column))
-        ) + gems_in_column
-
-
-def can_make_move(board):
-    """Return True if the board is in a state where a matching move can be made on it."""
-
-    # The patterns in oneOffPatterns represent gems that are configured
-    # in a way where it only takes one move to make a triplet.
-    one_off_patterns = (
-        ((0, 1), (1, 0), (2, 0)),
-        ((0, 1), (1, 1), (2, 0)),
-        ((0, 0), (1, 1), (2, 0)),
-        ((0, 1), (1, 0), (2, 1)),
-        ((0, 0), (1, 0), (2, 1)),
-        ((0, 0), (1, 1), (2, 1)),
-        ((0, 0), (0, 2), (0, 3)),
-        ((0, 0), (0, 1), (0, 3)),
-    )
-
-    # The x and y variables iterate over each space on the board.
-    # If we use + to represent the currently iterated space on the
-    # board, then this pattern: ((0,1), (1,0), (2,0))refers to identical
-    # gems being set up like this:
-    #
-    #     +A
-    #     B
-    #     C
-    #
-    # That is, gem A is offset from the + by (0,1), gem B is offset
-    # by (1,0), and gem C is offset by (2,0). In this case, gem A can
-    # be swapped to the left to form a vertical three-in-a-row triplet.
-    #
-    # There are eight possible ways for the gems to be one move
-    # away from forming a triple, hence oneOffPattern has 8 patterns.
-
-    for x in range(BOARD_WIDTH):
-        for y in range(BOARD_HEIGHT):
-            for pat in one_off_patterns:
-                # check each possible pattern of "match in next move" to
-                # see if a possible move can be made.
-                if (
-                    get_gem_at(board, x + pat[0][0], y + pat[0][1])
-                    == get_gem_at(board, x + pat[1][0], y + pat[1][1])
-                    == get_gem_at(board, x + pat[2][0], y + pat[2][1])
-                    != None
-                ) or (
-                    get_gem_at(board, x + pat[0][1], y + pat[0][0])
-                    == get_gem_at(board, x + pat[1][1], y + pat[1][0])
-                    == get_gem_at(board, x + pat[2][1], y + pat[2][0])
-                    != None
-                ):
-                    return True  # return True the first time you find a pattern
-    return False
-
-
-def draw_moving_gem(gem, progress, display_surf: pygame.Surface, gem_images):
+def draw_moving_gem(gem: GemInfo, progress, gem_game: GemGame):
     """
     Draw a gem sliding in the direction that its 'direction' key indicates.
 
@@ -553,168 +692,68 @@ def draw_moving_gem(gem, progress, display_surf: pygame.Surface, gem_images):
     movey = 0
     progress *= 0.01
 
-    if gem["direction"] == Direction.UP:
+    if gem.direction == Direction.UP:
         movey = -int(progress * GEM_IMAGE_SIZE)
-    elif gem["direction"] == Direction.DOWN:
+    elif gem.direction == Direction.DOWN:
         movey = int(progress * GEM_IMAGE_SIZE)
-    elif gem["direction"] == Direction.RIGHT:
+    elif gem.direction == Direction.RIGHT:
         movex = int(progress * GEM_IMAGE_SIZE)
-    elif gem["direction"] == Direction.LEFT:
+    elif gem.direction == Direction.LEFT:
         movex = -int(progress * GEM_IMAGE_SIZE)
 
-    basex = gem["x"]
-    basey = gem["y"]
+    basex = gem.x
+    basey = gem.y
+
     if basey == ROW_ABOVE_BOARD:
         basey = -1
 
     pixelx = XMARGIN + (basex * GEM_IMAGE_SIZE)
     pixely = YMARGIN + (basey * GEM_IMAGE_SIZE)
     rect = pygame.Rect((pixelx + movex, pixely + movey, GEM_IMAGE_SIZE, GEM_IMAGE_SIZE))
-    display_surf.blit(gem_images[gem["imageNum"]], rect)
+    gem_game.display_surf.blit(gem_game.gem_images[gem.image_num], rect)
 
 
-def get_gem_at(board, x, y):
-    """Return the gem image number stored at the given x, y coordinates of the board."""
-    if x < 0 or y < 0 or x >= BOARD_WIDTH or y >= BOARD_HEIGHT:
-        return None
-
-    return board[x][y]
-
-
-def find_matching_gems(board):
-    """Find sets of three or more matching gems and return them in a list."""
-    gems_to_remove = (
-        []
-    )  # a list of lists of gems in matching triplets that should be removed
-    board_copy = copy.deepcopy(board)
-
-    # loop through each space, checking for 3 adjacent identical gems
-    for x in range(BOARD_WIDTH):
-        for y in range(BOARD_HEIGHT):
-            # look for horizontal matches
-            if (
-                get_gem_at(board_copy, x, y)
-                == get_gem_at(board_copy, x + 1, y)
-                == get_gem_at(board_copy, x + 2, y)
-                and get_gem_at(board_copy, x, y) != EMPTY_SPACE
-            ):
-                target_gem = board_copy[x][y]
-                offset = 0
-                remove_set = []
-
-                while get_gem_at(board_copy, x + offset, y) == target_gem:
-                    # keep checking if there's more than 3 gems in a row
-                    remove_set.append((x + offset, y))
-                    board_copy[x + offset][y] = EMPTY_SPACE
-                    offset += 1
-                gems_to_remove.append(remove_set)
-
-            # look for vertical matches
-            if (
-                get_gem_at(board_copy, x, y)
-                == get_gem_at(board_copy, x, y + 1)
-                == get_gem_at(board_copy, x, y + 2)
-                and get_gem_at(board_copy, x, y) != EMPTY_SPACE
-            ):
-                target_gem = board_copy[x][y]
-                offset = 0
-                remove_set = []
-                while get_gem_at(board_copy, x, y + offset) == target_gem:
-                    # keep checking, in case there's more than 3 gems in a row
-                    remove_set.append((x, y + offset))
-                    board_copy[x][y + offset] = EMPTY_SPACE
-                    offset += 1
-                gems_to_remove.append(remove_set)
-
-    return gems_to_remove
-
-
-def highlight_space(x, y, display_surf: pygame.Surface, board_rects):
+def highlight_space(x: int, y: int, gem_game: GemGame):
     """Highlights the space at the given x,y board coordinates"""
-    pygame.draw.rect(display_surf, HIGHLIGHTCOLOR, board_rects[x][y], 4)
-
-
-def get_dropping_gems(board):
-    """Find all the gems that have an empty space below them"""
-    board_copy = copy.deepcopy(board)
-    dropping_gems = []
-
-    for x in range(BOARD_WIDTH):
-        for y in range(BOARD_HEIGHT - 2, -1, -1):
-            if board_copy[x][y + 1] == EMPTY_SPACE and board_copy[x][y] != EMPTY_SPACE:
-                # This space drops if not empty but the space below it is
-                dropping_gems.append(
-                    {
-                        "imageNum": board_copy[x][y],
-                        "x": x,
-                        "y": y,
-                        "direction": Direction.DOWN,
-                    }
-                )
-                board_copy[x][y] = EMPTY_SPACE
-
-    return dropping_gems
+    pygame.draw.rect(
+        gem_game.display_surf, HIGHLIGHTCOLOR, gem_game.board_rects[x][y], 4
+    )
 
 
 def animate_moving_gems(
-    board,
-    gems,
+    board: GameBoard,
+    gems: GemList,
     points_text,
-    score,
-    display_surf: pygame.Surface,
-    fps_clock: pygame.time.Clock,
-    gem_images,
-    basic_font: pygame.font.Font,
-    board_rects,
+    score: int,
+    gem_game: GemGame,
 ):
     """Animates the moving gems and points text on the board"""
     # pointsText is a dictionary with keys 'x', 'y', and 'points'
     progress = 0  # progress at 0 represents beginning, 100 means finished.
 
     while progress < 100:  # animation loop
-        display_surf.fill(BGCOLOR)
-        draw_board(board, display_surf, gem_images, board_rects)
+        gem_game.display_surf.fill(BGCOLOR)
+        draw_board(board, gem_game)
 
         for gem in gems:  # Draw each gem.
-            draw_moving_gem(gem, progress, display_surf, gem_images)
+            draw_moving_gem(gem, progress, gem_game)
 
-        draw_score(score, display_surf, basic_font)
+        draw_score(score, gem_game.display_surf, gem_game.basic_font)
 
         for point_text in points_text:
-            points_surf = basic_font.render(str(point_text["points"]), 1, SCORECOLOR)
+            points_surf = gem_game.basic_font.render(
+                str(point_text["points"]), 1, SCORECOLOR
+            )
             points_rect = points_surf.get_rect()
             points_rect.center = (point_text["x"], point_text["y"])
-            display_surf.blit(points_surf, points_rect)
+            gem_game.display_surf.blit(points_surf, points_rect)
 
         pygame.display.update()
-        fps_clock.tick(FPS)
+        gem_game.fps_clock.tick(FPS)
         progress += MOVE_RATE
 
 
-def move_gems(board, moving_gems):
-    """Moves the gems on the board based on their direction property"""
-    # movingGems is a list of dicts with keys x, y, direction, imageNum
-    for gem in moving_gems:
-        if gem["y"] != ROW_ABOVE_BOARD:
-            board[gem["x"]][gem["y"]] = EMPTY_SPACE
-            movex = 0
-            movey = 0
-
-            if gem["direction"] == Direction.LEFT:
-                movex = -1
-            elif gem["direction"] == Direction.RIGHT:
-                movex = 1
-            elif gem["direction"] == Direction.DOWN:
-                movey = 1
-            elif gem["direction"] == Direction.UP:
-                movey = -1
-            board[gem["x"] + movex][gem["y"] + movey] = gem["imageNum"]
-        else:
-            # gem is located above the board (where new gems come from)
-            board[gem["x"]][0] = gem["imageNum"]  # move to top row
-
-
-def check_for_gem_click(pos, board_rects):
+def check_for_gem_click(pos: Position, board_rects: BoardRects):
     """See if the mouse click was on the board"""
     for x in range(BOARD_WIDTH):
         for y in range(BOARD_HEIGHT):
@@ -724,30 +763,19 @@ def check_for_gem_click(pos, board_rects):
     return None  # Click was not on the board.
 
 
-def draw_board(board, display_surf: pygame.Surface, gem_images, board_rects):
+def draw_board(board: GameBoard, gem_game: GemGame):
     """Draws the gems on the board using the board data structure."""
     for x in range(BOARD_WIDTH):
         for y in range(BOARD_HEIGHT):
-            pygame.draw.rect(display_surf, GRIDCOLOR, board_rects[x][y], 1)
+            pygame.draw.rect(
+                gem_game.display_surf, GRIDCOLOR, gem_game.board_rects[x][y], 1
+            )
             gem_to_draw = board[x][y]
 
             if gem_to_draw != EMPTY_SPACE:
-                display_surf.blit(gem_images[gem_to_draw], board_rects[x][y])
-
-
-def get_board_copy_minus_gems(board, gems):
-    """Returns a copy of the passed board data structure without the gems in the "gems" list."""
-    #
-    # Gems is a list of dicts, with keys x, y, direction, imageNum
-
-    board_copy = copy.deepcopy(board)
-
-    # Remove some of the gems from this board data structure copy.
-    for gem in gems:
-        if gem["y"] != ROW_ABOVE_BOARD:
-            board_copy[gem["x"]][gem["y"]] = EMPTY_SPACE
-
-    return board_copy
+                gem_game.display_surf.blit(
+                    gem_game.gem_images[gem_to_draw], gem_game.board_rects[x][y]
+                )
 
 
 def draw_score(score, display_surf: pygame.Surface, basic_font: pygame.font.Font):

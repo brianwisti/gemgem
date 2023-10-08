@@ -2,7 +2,7 @@
 
 import pytest
 
-from arcade_gem import Direction, GemInfo
+from main import Direction, GemInfo
 
 
 # pylint: disable=missing-function-docstring,missing-class-docstring,redefined-outer-name
@@ -16,19 +16,13 @@ class TestGemInfo:
             (GemInfo(0, 0, 0), GemInfo(0, 1, 0), True),
             (GemInfo(0, 1, 0), GemInfo(0, 0, 0), True),
             (GemInfo(0, 0, 1), GemInfo(0, 0, 0), True),
+            (GemInfo(0, 0, 0), GemInfo(0, 0, 0), False),
             (GemInfo(0, 1, 1), GemInfo(0, 1, 5), False),
             (GemInfo(0, 1, 1), GemInfo(0, 2, 2), False),
         ],
     )
     def test_is_neighbor_of(self, first_gem, second_gem, expected):
         assert first_gem.is_adjacent_to(second_gem) == expected
-
-    def test_invalid_neighbors(self):
-        first_gem = GemInfo(0, 0, 0)
-        second_gem = GemInfo(0, 0, 0)
-
-        with pytest.raises(ValueError):
-            first_gem.is_adjacent_to(second_gem)
 
     @pytest.mark.parametrize(
         "first_gem,second_gem, first_direction, second_direction",
