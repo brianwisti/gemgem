@@ -21,5 +21,6 @@
     "titleBar.inactiveBackground": "#99670199",
     "titleBar.inactiveForeground": "#e7e7e799"
   },
-  "peacock.color": "#996701"
+  "peacock.color": "#996701",
+  "pylint.args": ["--extension-pkg-whitelist=pygame"]
 }

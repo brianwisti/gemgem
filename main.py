@@ -23,7 +23,6 @@ import time
 from enum import Enum
 
 import pygame
-from pygame.locals import *
 
 FPS = 30  # frames per second to update the screen
 WINDOW_WIDTH = 600  # width of the program's window, in pixels
@@ -73,17 +72,16 @@ ROW_ABOVE_BOARD = "row above board"  # an arbitrary, noninteger value
 
 def main():
     """Initialize the game and start the main game loop."""
-    global FPSCLOCK, DISPLAYSURF, GEM_IMAGES, GAME_SOUNDS, BASICFONT, BOARDRECTS
 
     # Initial set up.
     pygame.init()
-    FPSCLOCK = pygame.time.Clock()
-    DISPLAYSURF = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    fps_clock = pygame.time.Clock()
+    display_surf = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     pygame.display.set_caption("Gemgem")
-    BASICFONT = pygame.font.Font("freesansbold.ttf", 36)
+    basic_font = pygame.font.Font("freesansbold.ttf", 36)
 
     # Load the images
-    GEM_IMAGES = []
+    gem_images = []
 
     for i in range(1, NUM_GEM_IMAGES + 1):
         gem_image = pygame.image.load(f"gem{i}.png")
@@ -93,25 +91,25 @@ def main():
                 gem_image, (GEM_IMAGE_SIZE, GEM_IMAGE_SIZE)
             )
 
-        GEM_IMAGES.append(gem_image)
+        gem_images.append(gem_image)
 
     # Load the sounds.
-    GAME_SOUNDS = {}
-    GAME_SOUNDS["bad swap"] = pygame.mixer.Sound("badswap.wav")
-    GAME_SOUNDS["match"] = []
+    game_sounds = {}
+    game_sounds["bad swap"] = pygame.mixer.Sound("badswap.wav")
+    game_sounds["match"] = []
 
     for i in range(NUM_MATCH_SOUNDS):
-        GAME_SOUNDS["match"].append(pygame.mixer.Sound(f"match{i}.wav"))
+        game_sounds["match"].append(pygame.mixer.Sound(f"match{i}.wav"))
 
     # Create pygame.Rect objects for each board space to
     # do board-coordinate-to-pixel-coordinate conversions.
-    BOARDRECTS = []
+    board_rects = []
 
     for x in range(BOARD_WIDTH):
-        BOARDRECTS.append([])
+        board_rects.append([])
 
         for y in range(BOARD_HEIGHT):
-            r = pygame.Rect(
+            rect = pygame.Rect(
                 (
                     XMARGIN + (x * GEM_IMAGE_SIZE),
                     YMARGIN + (y * GEM_IMAGE_SIZE),
@@ -119,19 +117,42 @@ def main():
                     GEM_IMAGE_SIZE,
                 )
             )
-            BOARDRECTS[x].append(r)
+            board_rects[x].append(rect)
 
     while True:
-        run_game()
+        run_game(
+            fps_clock, display_surf, gem_images, game_sounds, basic_font, board_rects
+        )
 
 
-def run_game():
+def set_fps_clock():
+    """Initialize the FPS clock."""
+    return pygame.time.Clock()
+
+
+def run_game(
+    fps_clock: pygame.time.Clock,
+    display_surf: pygame.Surface,
+    gem_images,
+    game_sounds,
+    basic_font: pygame.font.Font,
+    board_rects,
+):
     """Plays through a single game. When the game is over, this function returns."""
 
     # initalize the board
     game_board = get_blank_board()
     score = 0
-    fill_board_and_animate(game_board, [], score)  # Drop the initial gems.
+    fill_board_and_animate(
+        game_board,
+        [],
+        score,
+        display_surf,
+        fps_clock,
+        gem_images,
+        basic_font,
+        board_rects,
+    )  # Drop the initial gems.
 
     # initialize variables for the start of a new game
     first_selected_gem = None
@@ -144,30 +165,32 @@ def run_game():
     while True:  # main game loop
         clicked_space = None
         for event in pygame.event.get():  # event handling loop
-            if event.type == QUIT or (event.type == KEYUP and event.key == K_ESCAPE):
+            if event.type == pygame.QUIT or (
+                event.type == pygame.KEYUP and event.key == pygame.K_ESCAPE
+            ):
                 pygame.quit()
                 sys.exit()
-            elif event.type == KEYUP and event.key == K_BACKSPACE:
+            elif event.type == pygame.KEYUP and event.key == pygame.K_BACKSPACE:
                 return  # start a new game
 
-            elif event.type == MOUSEBUTTONUP:
+            elif event.type == pygame.MOUSEBUTTONUP:
                 if game_is_over:
                     return  # after games ends, click to start a new game
 
                 if event.pos == (last_mouse_down_x, last_mouse_down_y):
                     # This event is a mouse click, not the end of a mouse drag.
-                    clicked_space = check_for_gem_click(event.pos)
+                    clicked_space = check_for_gem_click(event.pos, board_rects)
                 else:
                     # this is the end of a mouse drag
                     first_selected_gem = check_for_gem_click(
-                        (last_mouse_down_x, last_mouse_down_y)
+                        (last_mouse_down_x, last_mouse_down_y), board_rects
                     )
-                    clicked_space = check_for_gem_click(event.pos)
+                    clicked_space = check_for_gem_click(event.pos, board_rects)
                     if not first_selected_gem or not clicked_space:
                         # if not part of a valid drag, deselect both
                         first_selected_gem = None
                         clicked_space = None
-            elif event.type == MOUSEBUTTONDOWN:
+            elif event.type == pygame.MOUSEBUTTONDOWN:
                 # this is the start of a mouse click or mouse drag
                 last_mouse_down_x, last_mouse_down_y = event.pos
 
@@ -190,7 +213,15 @@ def run_game():
                 game_board, (first_swapping_gem, second_swapping_gem)
             )
             animate_moving_gems(
-                board_copy, [first_swapping_gem, second_swapping_gem], [], score
+                board_copy,
+                [first_swapping_gem, second_swapping_gem],
+                [],
+                score,
+                display_surf,
+                fps_clock,
+                gem_images,
+                basic_font,
+                board_rects,
             )
 
             assert first_swapping_gem
@@ -205,11 +236,20 @@ def run_game():
 
             # See if this is a matching move.
             matched_gems = find_matching_gems(game_board)
-            if matched_gems == []:
+
+            if not matched_gems:
                 # Was not a matching move; swap the gems back
-                GAME_SOUNDS["bad swap"].play()
+                game_sounds["bad swap"].play()
                 animate_moving_gems(
-                    board_copy, [first_swapping_gem, second_swapping_gem], [], score
+                    board_copy,
+                    [first_swapping_gem, second_swapping_gem],
+                    [],
+                    score,
+                    display_surf,
+                    fps_clock,
+                    gem_images,
+                    basic_font,
+                    board_rects,
                 )
                 game_board[first_swapping_gem["x"]][
                     first_swapping_gem["y"]
@@ -229,25 +269,36 @@ def run_game():
                     # points the player got. points is a list because if
                     # the playergets multiple matches, then multiple points text should appear.
                     points = []
+                    gem = None
+
                     for gem_set in matched_gems:
                         score_add += 10 + (len(gem_set) - 3) * 10
 
                         for gem in gem_set:
                             game_board[gem[0]][gem[1]] = EMPTY_SPACE
 
-                        # Why are we referencing `gem` outside the loop?
-                        points.append(
-                            {
-                                "points": score_add,
-                                "x": gem[0] * GEM_IMAGE_SIZE + XMARGIN,
-                                "y": gem[1] * GEM_IMAGE_SIZE + YMARGIN,
-                            }
-                        )
-                    random.choice(GAME_SOUNDS["match"]).play()
+                        if gem:
+                            points.append(
+                                {
+                                    "points": score_add,
+                                    "x": gem[0] * GEM_IMAGE_SIZE + XMARGIN,
+                                    "y": gem[1] * GEM_IMAGE_SIZE + YMARGIN,
+                                }
+                            )
+                    random.choice(game_sounds["match"]).play()
                     score += score_add
 
                     # Drop the new gems.
-                    fill_board_and_animate(game_board, points, score)
+                    fill_board_and_animate(
+                        game_board,
+                        points,
+                        score,
+                        display_surf,
+                        fps_clock,
+                        gem_images,
+                        basic_font,
+                        board_rects,
+                    )
 
                     # Check if there are any new matches.
                     matched_gems = find_matching_gems(game_board)
@@ -257,17 +308,22 @@ def run_game():
                 game_is_over = True
 
         # Draw the board.
-        DISPLAYSURF.fill(BGCOLOR)
-        draw_board(game_board)
+        display_surf.fill(BGCOLOR)
+        draw_board(game_board, display_surf, gem_images, board_rects)
 
         if first_selected_gem is not None:
-            highlight_space(first_selected_gem["x"], first_selected_gem["y"])
+            highlight_space(
+                first_selected_gem["x"],
+                first_selected_gem["y"],
+                display_surf,
+                board_rects,
+            )
 
         if game_is_over:
             if click_continue_text_surf is None:
                 # Only render the text once. In future iterations, just
                 # use the Surface object already in clickContinueTextSurf
-                click_continue_text_surf = BASICFONT.render(
+                click_continue_text_surf = basic_font.render(
                     f"Final Score: {score} (Click to continue)",
                     1,
                     GAMEOVERCOLOR,
@@ -278,14 +334,14 @@ def run_game():
                     WINDOW_HEIGHT / 2
                 )
 
-            DISPLAYSURF.blit(click_continue_text_surf, click_continue_text_rect)
+            display_surf.blit(click_continue_text_surf, click_continue_text_rect)
         elif score > 0 and time.time() - last_score_deduction > DEDUCT_SPEED:
             # score drops over time
             score -= 1
             last_score_deduction = time.time()
-        draw_score(score)
+        draw_score(score, display_surf, basic_font)
         pygame.display.update()
-        FPSCLOCK.tick(FPS)
+        fps_clock.tick(FPS)
 
 
 def get_swapping_gems(board, first_x_y, second_x_y):
@@ -333,9 +389,20 @@ def get_blank_board():
     return board
 
 
-def fill_board_and_animate(board, points, score):
-    """Fills the board with gems and animates their placement using existing animation functions."""
-    drop_slots = get_drop_slots(board)
+def fill_board_and_animate(
+    board,
+    points,
+    score,
+    display_surf: pygame.Surface,
+    fps_clock: pygame.time.Clock,
+    gem_images,
+    basic_font: pygame.font.Font,
+    board_rects,
+):
+    """
+    Fills the board with gems and animates their placement using existing animation functions.
+    """
+    drop_slots = get_drop_slots(board, gem_images)
 
     while drop_slots != [[]] * BOARD_WIDTH:
         # do the dropping animation as long as there are more gems to drop
@@ -354,7 +421,17 @@ def fill_board_and_animate(board, points, score):
                 )
 
         board_copy = get_board_copy_minus_gems(board, moving_gems)
-        animate_moving_gems(board_copy, moving_gems, points, score)
+        animate_moving_gems(
+            board_copy,
+            moving_gems,
+            points,
+            score,
+            display_surf,
+            fps_clock,
+            gem_images,
+            basic_font,
+            board_rects,
+        )
         move_gems(board, moving_gems)
 
         # Make the next row of gems from the drop slots
@@ -367,8 +444,9 @@ def fill_board_and_animate(board, points, score):
             del drop_slots[x][0]
 
 
-def get_drop_slots(board):
-    """Creates a "drop slot" for each column and fills the slot with a number of gems that that column is lacking.
+def get_drop_slots(board, gem_images):
+    """
+    Creates a "drop slot" for each column, filled with gems that the column is lacking.
 
     This function assumes that the gems have been gravity dropped already.
     """
@@ -384,7 +462,7 @@ def get_drop_slots(board):
     for x in range(BOARD_WIDTH):
         for y in range(BOARD_HEIGHT - 1, -1, -1):  # start from bottom, going up
             if board_copy[x][y] == EMPTY_SPACE:
-                possible_gems = list(range(len(GEM_IMAGES)))
+                possible_gems = list(range(len(gem_images)))
                 for offset_x, offset_y in ((0, -1), (1, 0), (0, 1), (-1, 0)):
                     # Narrow down the possible gems we should put in the
                     # blank space so we don't end up putting an two of
@@ -414,7 +492,7 @@ def pull_down_all_gems(board):
 
 
 def can_make_move(board):
-    """Return True if the board is in a state where a matching move can be made on it. Otherwise return False."""
+    """Return True if the board is in a state where a matching move can be made on it."""
 
     # The patterns in oneOffPatterns represent gems that are configured
     # in a way where it only takes one move to make a triplet.
@@ -465,7 +543,7 @@ def can_make_move(board):
     return False
 
 
-def draw_moving_gem(gem, progress):
+def draw_moving_gem(gem, progress, display_surf: pygame.Surface, gem_images):
     """
     Draw a gem sliding in the direction that its 'direction' key indicates.
 
@@ -491,16 +569,16 @@ def draw_moving_gem(gem, progress):
 
     pixelx = XMARGIN + (basex * GEM_IMAGE_SIZE)
     pixely = YMARGIN + (basey * GEM_IMAGE_SIZE)
-    r = pygame.Rect((pixelx + movex, pixely + movey, GEM_IMAGE_SIZE, GEM_IMAGE_SIZE))
-    DISPLAYSURF.blit(GEM_IMAGES[gem["imageNum"]], r)
+    rect = pygame.Rect((pixelx + movex, pixely + movey, GEM_IMAGE_SIZE, GEM_IMAGE_SIZE))
+    display_surf.blit(gem_images[gem["imageNum"]], rect)
 
 
 def get_gem_at(board, x, y):
     """Return the gem image number stored at the given x, y coordinates of the board."""
     if x < 0 or y < 0 or x >= BOARD_WIDTH or y >= BOARD_HEIGHT:
         return None
-    else:
-        return board[x][y]
+
+    return board[x][y]
 
 
 def find_matching_gems(board):
@@ -551,9 +629,9 @@ def find_matching_gems(board):
     return gems_to_remove
 
 
-def highlight_space(x, y):
+def highlight_space(x, y, display_surf: pygame.Surface, board_rects):
     """Highlights the space at the given x,y board coordinates"""
-    pygame.draw.rect(DISPLAYSURF, HIGHLIGHTCOLOR, BOARDRECTS[x][y], 4)
+    pygame.draw.rect(display_surf, HIGHLIGHTCOLOR, board_rects[x][y], 4)
 
 
 def get_dropping_gems(board):
@@ -578,28 +656,38 @@ def get_dropping_gems(board):
     return dropping_gems
 
 
-def animate_moving_gems(board, gems, points_text, score):
+def animate_moving_gems(
+    board,
+    gems,
+    points_text,
+    score,
+    display_surf: pygame.Surface,
+    fps_clock: pygame.time.Clock,
+    gem_images,
+    basic_font: pygame.font.Font,
+    board_rects,
+):
     """Animates the moving gems and points text on the board"""
     # pointsText is a dictionary with keys 'x', 'y', and 'points'
     progress = 0  # progress at 0 represents beginning, 100 means finished.
 
     while progress < 100:  # animation loop
-        DISPLAYSURF.fill(BGCOLOR)
-        draw_board(board)
+        display_surf.fill(BGCOLOR)
+        draw_board(board, display_surf, gem_images, board_rects)
 
         for gem in gems:  # Draw each gem.
-            draw_moving_gem(gem, progress)
+            draw_moving_gem(gem, progress, display_surf, gem_images)
 
-        draw_score(score)
+        draw_score(score, display_surf, basic_font)
 
         for point_text in points_text:
-            points_surf = BASICFONT.render(str(point_text["points"]), 1, SCORECOLOR)
+            points_surf = basic_font.render(str(point_text["points"]), 1, SCORECOLOR)
             points_rect = points_surf.get_rect()
             points_rect.center = (point_text["x"], point_text["y"])
-            DISPLAYSURF.blit(points_surf, points_rect)
+            display_surf.blit(points_surf, points_rect)
 
         pygame.display.update()
-        FPSCLOCK.tick(FPS)
+        fps_clock.tick(FPS)
         progress += MOVE_RATE
 
 
@@ -626,25 +714,25 @@ def move_gems(board, moving_gems):
             board[gem["x"]][0] = gem["imageNum"]  # move to top row
 
 
-def check_for_gem_click(pos):
+def check_for_gem_click(pos, board_rects):
     """See if the mouse click was on the board"""
     for x in range(BOARD_WIDTH):
         for y in range(BOARD_HEIGHT):
-            if BOARDRECTS[x][y].collidepoint(pos[0], pos[1]):
+            if board_rects[x][y].collidepoint(pos[0], pos[1]):
                 return {"x": x, "y": y}
 
     return None  # Click was not on the board.
 
 
-def draw_board(board):
+def draw_board(board, display_surf: pygame.Surface, gem_images, board_rects):
     """Draws the gems on the board using the board data structure."""
     for x in range(BOARD_WIDTH):
         for y in range(BOARD_HEIGHT):
-            pygame.draw.rect(DISPLAYSURF, GRIDCOLOR, BOARDRECTS[x][y], 1)
+            pygame.draw.rect(display_surf, GRIDCOLOR, board_rects[x][y], 1)
             gem_to_draw = board[x][y]
 
             if gem_to_draw != EMPTY_SPACE:
-                DISPLAYSURF.blit(GEM_IMAGES[gem_to_draw], BOARDRECTS[x][y])
+                display_surf.blit(gem_images[gem_to_draw], board_rects[x][y])
 
 
 def get_board_copy_minus_gems(board, gems):
@@ -662,12 +750,12 @@ def get_board_copy_minus_gems(board, gems):
     return board_copy
 
 
-def draw_score(score):
+def draw_score(score, display_surf: pygame.Surface, basic_font: pygame.font.Font):
     """Draws the score text in the lower left corner of the screen."""
-    score_img = BASICFONT.render(str(score), 1, SCORECOLOR)
+    score_img = basic_font.render(str(score), 1, SCORECOLOR)
     score_rect = score_img.get_rect()
     score_rect.bottomleft = (10, WINDOW_HEIGHT - 6)
-    DISPLAYSURF.blit(score_img, score_rect)
+    display_surf.blit(score_img, score_rect)
 
 
 if __name__ == "__main__":
