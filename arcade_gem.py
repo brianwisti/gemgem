@@ -52,6 +52,39 @@ class GemInfo:
     y: int
     direction: Direction = Direction.DOWN
 
+    def is_adjacent_to(self, other: "GemInfo"):
+        """
+        Return True if adjacent to other gem.
+
+        A gem is adjacent if it is directly above, below, left, or right of the other gem.
+
+        Raises a ValueError when two gems occupy the same space.
+        """
+
+        if self.x == other.x and self.y == other.y:
+            raise ValueError(f"Gems occupy the same space at ({self.x}, {self.y})")
+
+        return ((self.x - other.x) ** 2 + (self.y - other.y) ** 2) ** 0.5 <= 1
+
+    def prepare_swap(self, other: "GemInfo"):
+        """Set each gem's direction to swap locations."""
+
+        if not self.is_adjacent_to(other):
+            raise ValueError("Gems must be adjacent")
+
+        if self.x > other.x and self.y == other.y:
+            self.direction = Direction.LEFT
+            other.direction = Direction.RIGHT
+        elif self.x < other.x and self.y == other.y:
+            self.direction = Direction.RIGHT
+            other.direction = Direction.LEFT
+        elif self.x == other.x and self.y < other.y:
+            self.direction = Direction.UP
+            other.direction = Direction.DOWN
+        elif self.x == other.x and self.y > other.y:
+            self.direction = Direction.DOWN
+            other.direction = Direction.UP
+
 
 GemList = list[GemInfo]
 
