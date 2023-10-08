@@ -333,6 +333,86 @@ def get_blank_board():
     return board
 
 
+def fill_board_and_animate(board, points, score):
+    """Fills the board with gems and animates their placement using existing animation functions."""
+    drop_slots = get_drop_slots(board)
+
+    while drop_slots != [[]] * BOARD_WIDTH:
+        # do the dropping animation as long as there are more gems to drop
+        moving_gems = get_dropping_gems(board)
+
+        for x, drop_slot in enumerate(drop_slots):
+            if len(drop_slot) != 0:
+                # cause the lowest gem in each slot to begin moving in the DOWN direction
+                moving_gems.append(
+                    {
+                        "imageNum": drop_slot[0],
+                        "x": x,
+                        "y": ROW_ABOVE_BOARD,
+                        "direction": Direction.DOWN,
+                    }
+                )
+
+        board_copy = get_board_copy_minus_gems(board, moving_gems)
+        animate_moving_gems(board_copy, moving_gems, points, score)
+        move_gems(board, moving_gems)
+
+        # Make the next row of gems from the drop slots
+        # the lowest by deleting the previous lowest gems.
+        for x, drop_slot in enumerate(drop_slots):
+            if len(drop_slot) == 0:
+                continue
+
+            board[x][0] = drop_slot[0]
+            del drop_slots[x][0]
+
+
+def get_drop_slots(board):
+    """Creates a "drop slot" for each column and fills the slot with a number of gems that that column is lacking.
+
+    This function assumes that the gems have been gravity dropped already.
+    """
+    board_copy = copy.deepcopy(board)
+    pull_down_all_gems(board_copy)
+
+    drop_slots = []
+
+    for _ in range(BOARD_WIDTH):
+        drop_slots.append([])
+
+    # count the number of empty spaces in each column on the board
+    for x in range(BOARD_WIDTH):
+        for y in range(BOARD_HEIGHT - 1, -1, -1):  # start from bottom, going up
+            if board_copy[x][y] == EMPTY_SPACE:
+                possible_gems = list(range(len(GEM_IMAGES)))
+                for offset_x, offset_y in ((0, -1), (1, 0), (0, 1), (-1, 0)):
+                    # Narrow down the possible gems we should put in the
+                    # blank space so we don't end up putting an two of
+                    # the same gems next to each other when they drop.
+                    neighbor_gem = get_gem_at(board_copy, x + offset_x, y + offset_y)
+                    if neighbor_gem is not None and neighbor_gem in possible_gems:
+                        possible_gems.remove(neighbor_gem)
+
+                new_gem = random.choice(possible_gems)
+                board_copy[x][y] = new_gem
+                drop_slots[x].append(new_gem)
+
+    return drop_slots
+
+
+def pull_down_all_gems(board):
+    """pulls down gems on the board to the bottom to fill in any gaps"""
+    for x in range(BOARD_WIDTH):
+        gems_in_column = []
+
+        for y in range(BOARD_HEIGHT):
+            if board[x][y] != EMPTY_SPACE:
+                gems_in_column.append(board[x][y])
+        board[x] = (
+            [EMPTY_SPACE] * (BOARD_HEIGHT - len(gems_in_column))
+        ) + gems_in_column
+
+
 def can_make_move(board):
     """Return True if the board is in a state where a matching move can be made on it. Otherwise return False."""
 
@@ -415,54 +495,12 @@ def draw_moving_gem(gem, progress):
     DISPLAYSURF.blit(GEM_IMAGES[gem["imageNum"]], r)
 
 
-def pull_down_all_gems(board):
-    """pulls down gems on the board to the bottom to fill in any gaps"""
-    for x in range(BOARD_WIDTH):
-        gemsInColumn = []
-        for y in range(BOARD_HEIGHT):
-            if board[x][y] != EMPTY_SPACE:
-                gemsInColumn.append(board[x][y])
-        board[x] = ([EMPTY_SPACE] * (BOARD_HEIGHT - len(gemsInColumn))) + gemsInColumn
-
-
 def get_gem_at(board, x, y):
     """Return the gem image number stored at the given x, y coordinates of the board."""
     if x < 0 or y < 0 or x >= BOARD_WIDTH or y >= BOARD_HEIGHT:
         return None
     else:
         return board[x][y]
-
-
-def get_drop_slots(board):
-    """Creates a "drop slot" for each column and fills the slot with a number of gems that that column is lacking.
-
-    This function assumes that the gems have been gravity dropped already.
-    """
-    board_copy = copy.deepcopy(board)
-    pull_down_all_gems(board_copy)
-
-    drop_slots = []
-
-    for _ in range(BOARD_WIDTH):
-        drop_slots.append([])
-
-    # count the number of empty spaces in each column on the board
-    for x in range(BOARD_WIDTH):
-        for y in range(BOARD_HEIGHT - 1, -1, -1):  # start from bottom, going up
-            if board_copy[x][y] == EMPTY_SPACE:
-                possible_gems = list(range(len(GEM_IMAGES)))
-                for offset_x, offset_y in ((0, -1), (1, 0), (0, 1), (-1, 0)):
-                    # Narrow down the possible gems we should put in the
-                    # blank space so we don't end up putting an two of
-                    # the same gems next to each other when they drop.
-                    neighbor_gem = get_gem_at(board_copy, x + offset_x, y + offset_y)
-                    if neighbor_gem is not None and neighbor_gem in possible_gems:
-                        possible_gems.remove(neighbor_gem)
-
-                new_gem = random.choice(possible_gems)
-                board_copy[x][y] = new_gem
-                drop_slots[x].append(new_gem)
-    return drop_slots
 
 
 def find_matching_gems(board):
@@ -586,40 +624,6 @@ def move_gems(board, moving_gems):
         else:
             # gem is located above the board (where new gems come from)
             board[gem["x"]][0] = gem["imageNum"]  # move to top row
-
-
-def fill_board_and_animate(board, points, score):
-    """Fills the board with gems and animates their placement using existing animation functions."""
-    drop_slots = get_drop_slots(board)
-
-    while drop_slots != [[]] * BOARD_WIDTH:
-        # do the dropping animation as long as there are more gems to drop
-        moving_gems = get_dropping_gems(board)
-
-        for x, drop_slot in enumerate(drop_slots):
-            if len(drop_slot) != 0:
-                # cause the lowest gem in each slot to begin moving in the DOWN direction
-                moving_gems.append(
-                    {
-                        "imageNum": drop_slot[0],
-                        "x": x,
-                        "y": ROW_ABOVE_BOARD,
-                        "direction": Direction.DOWN,
-                    }
-                )
-
-        board_copy = get_board_copy_minus_gems(board, moving_gems)
-        animate_moving_gems(board_copy, moving_gems, points, score)
-        move_gems(board, moving_gems)
-
-        # Make the next row of gems from the drop slots
-        # the lowest by deleting the previous lowest gems.
-        for x, drop_slot in enumerate(drop_slots):
-            if len(drop_slot) == 0:
-                continue
-
-            board[x][0] = drop_slot[0]
-            del drop_slots[x][0]
 
 
 def check_for_gem_click(pos):
