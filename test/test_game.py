@@ -2,7 +2,7 @@
 
 import pytest
 
-from main import Direction, GemInfo
+from pygame_gem import Direction, GemInfo
 
 
 # pylint: disable=missing-function-docstring,missing-class-docstring,redefined-outer-name

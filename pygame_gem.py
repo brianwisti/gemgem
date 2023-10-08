@@ -516,8 +516,8 @@ def run_game(gem_game: GemGame):
                 continue
 
             # Show the swap animation on the screen.
-            board_copy = get_board_copy_minus_gems(
-                game_board, (first_swapping_gem, second_swapping_gem)
+            board_copy = game_board.get_board_copy_minus_gems(
+                (first_swapping_gem, second_swapping_gem)
             )
             animate_moving_gems(
                 board_copy,
@@ -662,7 +662,7 @@ def fill_board_and_animate(
                     )
                 )
 
-        board_copy = get_board_copy_minus_gems(board, moving_gems)
+        board_copy = board.get_board_copy_minus_gems(moving_gems)
         animate_moving_gems(
             board_copy,
             moving_gems,

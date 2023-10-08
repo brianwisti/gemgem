@@ -1,0 +1,4 @@
+pygame
+arcade
+prospector[with_mypy]
+rich
