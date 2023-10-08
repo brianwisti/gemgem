@@ -3,6 +3,7 @@
 import copy
 import logging
 import random
+from dataclasses import dataclass
 from enum import Enum
 
 import arcade
@@ -33,39 +34,43 @@ COLOR_SELECTED_SQUARE = color.GRAPE
 # Identifies squares without a gem.
 EMPTY_SPACE = -1
 
-EMPTY_ROW = [[]] * BOARD_WIDTH
 
 # Arbitrary noninteger representing above the board
 ROW_ABOVE_BOARD = "row above board"
 
 GameBoard = list[list[int]]
+EMPTY_ROW: list[list] = [[]] * BOARD_WIDTH
 
 # constants for direction values
 Direction = Enum("Direction", ["UP", "DOWN", "LEFT", "RIGHT"])
-GemList = list[dict[str, int | str | Direction]]
+
+
+@dataclass
+class GemInfo:
+    """Describes a single gem and its movement."""
+
+    image_num: int
+    x: int
+    y: int
+    direction: Direction
+
+
+GemList = list[GemInfo]
 
 
 class GemGame(arcade.Window):
     """Our custom game Window."""
 
-    board_sprites: arcade.SpriteList | None
-    board: GameBoard | None
+    board: GameBoard
     score: int
 
     def __init__(self):
         """Initialize the game window."""
         super().__init__(WINDOW_WIDTH, WINDOW_HEIGHT, "Gem Game")
         # Holds our gem images.
-        self.board_sprites = None
-        self.score = 0
-        self.board = None
-        arcade.set_background_color(color.AMAZON)
-
-    def setup(self):
-        """Set up the game and initialize the variables."""
-        self.board_sprites = arcade.SpriteList()
         self.score = 0
         self.board = get_blank_board()
+        arcade.set_background_color(color.AMAZON)
 
     def on_draw(self):
         """Render the current frame."""
@@ -79,17 +84,18 @@ class GemGame(arcade.Window):
             moving_gems = get_dropping_gems(self.board)
             logging.info("moving gems: %s", moving_gems)
 
-            for x, drop_slot in enumerate(drop_slots):
+            for index, drop_slot in enumerate(drop_slots):
                 if drop_slot:
                     # cause the lowest gem in each slot to begin moving in the DOWN direction
                     moving_gems.append(
-                        {
-                            "imageNum": drop_slot[0],
-                            "x": x,
-                            "y": ROW_ABOVE_BOARD,
-                            "direction": Direction.DOWN,
-                        }
+                        GemInfo(
+                            image_num=drop_slot[0],
+                            x=index,
+                            y=ROW_ABOVE_BOARD,
+                            direction=Direction.DOWN,
+                        )
                     )
+
             board_copy = get_board_copy_minus_gems(self.board, moving_gems)
             logging.debug("board copy: %s", board_copy)
 
@@ -105,6 +111,7 @@ class GemGame(arcade.Window):
                 self.board[x][0] = drop_slot[0]
                 del drop_slots[x][0]
 
+        board_sprites = arcade.SpriteList()
         for row in range(BOARD_HEIGHT):
             for column in range(BOARD_WIDTH):
                 x = (
@@ -129,9 +136,9 @@ class GemGame(arcade.Window):
 
                 sprite.center_x = x
                 sprite.center_y = y
-                self.board_sprites.append(sprite)
+                board_sprites.append(sprite)
 
-        self.board_sprites.draw()
+        board_sprites.draw()
 
     def on_mouse_press(self, x, y, button, modifiers):
         """Called when the user presses a mouse button."""
@@ -141,16 +148,9 @@ class GemGame(arcade.Window):
         column = x // (GEM_IMAGE_SIZE + BOARD_MARGIN)
         row = y // (GEM_IMAGE_SIZE + BOARD_MARGIN)
 
-        print(f"Click coordinates: ({x}, {y}). Grid coordinates: ({row}, {column})")
-
-        # Make sure we are on-grid. It is possible to click in the upper right
-        # corner in the margin and go to a grid location that doesn't exist
-        if row < BOARD_HEIGHT and column < BOARD_WIDTH:
-            # Flip the location between 1 and 0.
-            if self.board[row][column] == EMPTY_SPACE:
-                self.board[row][column] = 1
-            else:
-                self.board[row][column] = EMPTY_SPACE
+        logging.info(
+            "Click coordinates: (%s, %s). Grid coordinats: (%s, %s)", x, y, row, column
+        )
 
 
 def get_blank_board() -> GameBoard:
@@ -160,7 +160,7 @@ def get_blank_board() -> GameBoard:
 
 def get_drop_slots(board: GameBoard):
     """
-    Creates a "drop slot" for each column and fills the slot with a number of gems that that column is lacking.
+    Creates a "drop slot" for each column, filled with a number of gems that that column is lacking.
 
     This function assumes that the gems have been gravity dropped already.
     """
@@ -179,7 +179,7 @@ def get_drop_slots(board: GameBoard):
             [EMPTY_SPACE] * (BOARD_HEIGHT - len(gems_in_column))
         ) + gems_in_column
 
-    drop_slots = [list() for _ in range(BOARD_WIDTH)]
+    drop_slots: GameBoard = [[] for _ in range(BOARD_WIDTH)]
 
     # count the number of empty spaces in each column on the board
     for x in range(BOARD_WIDTH):
@@ -228,12 +228,12 @@ def get_dropping_gems(board: GameBoard) -> GemList:
             if board_copy[x][y + 1] == EMPTY_SPACE and board_copy[x][y] != EMPTY_SPACE:
                 # This space drops if not empty but the space below it is
                 dropping_gems.append(
-                    {
-                        "imageNum": board_copy[x][y],
-                        "x": x,
-                        "y": y,
-                        "direction": Direction.DOWN,
-                    }
+                    GemInfo(
+                        image_num=board_copy[x][y],
+                        x=x,
+                        y=y,
+                        direction=Direction.DOWN,
+                    )
                 )
                 board_copy[x][y] = EMPTY_SPACE
 
@@ -243,46 +243,45 @@ def get_dropping_gems(board: GameBoard) -> GemList:
 def get_board_copy_minus_gems(board: GameBoard, gems: GemList):
     """Returns a copy of the passed board data structure without the gems in the "gems" list."""
     #
-    # Gems is a list of dicts, with keys x, y, direction, imageNum
+    # Gems is a list of dicts, with keys x, y, direction, image_num
 
     board_copy = copy.deepcopy(board)
 
     # Remove some of the gems from this board data structure copy.
     for gem in gems:
-        if gem["y"] != ROW_ABOVE_BOARD:
-            board_copy[gem["x"]][gem["y"]] = EMPTY_SPACE
+        if gem.y != ROW_ABOVE_BOARD:
+            board_copy[gem.x][gem.y] = EMPTY_SPACE
 
     return board_copy
 
 
 def move_gems(board: GameBoard, moving_gems: GemList):
     """Moves the gems on the board based on their direction property"""
-    # movingGems is a list of dicts with keys x, y, direction, imageNum
+    # movingGems is a list of dicts with keys x, y, direction, image_num
     for gem in moving_gems:
-        if gem["y"] != ROW_ABOVE_BOARD:
-            board[gem["x"]][gem["y"]] = EMPTY_SPACE
+        if gem.y != ROW_ABOVE_BOARD:
+            board[gem.x][gem.y] = EMPTY_SPACE
             movex = 0
             movey = 0
 
-            if gem["direction"] == Direction.LEFT:
+            if gem.direction == Direction.LEFT:
                 movex = -1
-            elif gem["direction"] == Direction.RIGHT:
+            elif gem.direction == Direction.RIGHT:
                 movex = 1
-            elif gem["direction"] == Direction.DOWN:
+            elif gem.direction == Direction.DOWN:
                 movey = 1
-            elif gem["direction"] == Direction.UP:
+            elif gem.direction == Direction.UP:
                 movey = -1
 
-            board[gem["x"] + movex][gem["y"] + movey] = gem["imageNum"]
+            board[gem.x + movex][gem.y + movey] = gem.image_num
         else:
             # gem is located above the board (where new gems come from)
-            board[gem["x"]][0] = gem["imageNum"]  # move to top row
+            board[gem.x][0] = gem.image_num  # move to top row
 
 
 def main():
     """Set up the game and run the main game loop."""
     window = GemGame()
-    window.setup()
     arcade.run()
 
 
