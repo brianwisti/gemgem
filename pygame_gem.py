@@ -375,6 +375,22 @@ class GameBoard:
 
 
 @dataclass
+class GameSession:
+    """Tracks score and status of current game."""
+
+    score: int = 0
+    game_is_over: bool = False
+    board: GameBoard = field(default_factory=GameBoard)
+    first_selected_gem: dict[str, int] | None = None
+    clicked_space: dict[str, int] | None = None
+
+    def end_game_if_stuck(self):
+        """Mark this game as over if there are no moves on the board."""
+        if not self.board.can_make_move():
+            self.game_is_over = True
+
+
+@dataclass
 class GameSounds:
     """Knows what sounds to play for particular situations."""
 
@@ -399,6 +415,7 @@ class GemGame:
     gem_images: list[pygame.Surface] = field(init=False, default_factory=list)
     game_sounds: GameSounds = field(init=False, default_factory=GameSounds)
     board_rects: BoardRects = field(init=False, default_factory=list)
+    last_mouse_down: tuple[int, int] | None = None
 
     def __post_init__(self):
         """Initialize fields."""
@@ -579,21 +596,19 @@ def main():
 def run_game(gem_game: GemGame):
     """Plays through a single game. When the game is over, this function returns."""
 
-    # initalize the board
-    game_board = GameBoard()
-    score = 0
-    gem_game.fill_board_and_animate(game_board, [], score)  # Drop the initial gems.
+    # initalize the session
+    session = GameSession()
+    gem_game.fill_board_and_animate(
+        session.board, [], session.score
+    )  # Drop the initial gems.
 
     # initialize variables for the start of a new game
-    first_selected_gem = None
-    last_mouse_down_x = None
-    last_mouse_down_y = None
-    game_is_over = False
     last_score_deduction = time.time()
     click_continue_text_surf = None
 
     while True:  # main game loop
-        clicked_space = None
+        session.clicked_space = None
+
         for event in pygame.event.get():  # event handling loop
             if event.type == pygame.QUIT or (
                 event.type == pygame.KEYUP and event.key == pygame.K_ESCAPE
@@ -604,63 +619,68 @@ def run_game(gem_game: GemGame):
                 return  # start a new game
 
             elif event.type == pygame.MOUSEBUTTONUP:
-                if game_is_over:
+                if session.game_is_over:
                     return  # after games ends, click to start a new game
 
-                if event.pos == (last_mouse_down_x, last_mouse_down_y):
+                if event.pos == gem_game.last_mouse_down:
                     # This event is a mouse click, not the end of a mouse drag.
-                    clicked_space = check_for_gem_click(event.pos, gem_game.board_rects)
-                elif last_mouse_down_x and last_mouse_down_y:
-                    # this is the end of a mouse drag
-                    first_selected_gem = check_for_gem_click(
-                        (last_mouse_down_x, last_mouse_down_y), gem_game.board_rects
+                    session.clicked_space = check_for_gem_click(
+                        event.pos, gem_game.board_rects
                     )
-                    clicked_space = check_for_gem_click(event.pos, gem_game.board_rects)
-                    if not first_selected_gem or not clicked_space:
+                elif gem_game.last_mouse_down:
+                    # this is the end of a mouse drag
+                    session.first_selected_gem = check_for_gem_click(
+                        gem_game.last_mouse_down, gem_game.board_rects
+                    )
+                    session.clicked_space = check_for_gem_click(
+                        event.pos, gem_game.board_rects
+                    )
+
+                    if not session.first_selected_gem or not session.clicked_space:
                         # if not part of a valid drag, deselect both
-                        first_selected_gem = None
-                        clicked_space = None
+                        session.first_selected_gem = None
+                        session.clicked_space = None
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 # this is the start of a mouse click or mouse drag
-                last_mouse_down_x, last_mouse_down_y = event.pos
+                gem_game.last_mouse_down = event.pos
 
-        if clicked_space and not first_selected_gem:
+        if session.clicked_space and not session.first_selected_gem:
             # This was the first gem clicked on.
-            first_selected_gem = clicked_space
-        elif clicked_space and first_selected_gem:
+            session.first_selected_gem = session.clicked_space
+        elif session.clicked_space and session.first_selected_gem:
             # Two gems have been clicked on and selected. Swap the gems.
-            first_swapping_gem, second_swapping_gem = game_board.get_swapping_gems(
-                first_selected_gem, clicked_space
+            first_swapping_gem, second_swapping_gem = session.board.get_swapping_gems(
+                session.first_selected_gem, session.clicked_space
             )
 
             if first_swapping_gem is None and second_swapping_gem is None:
                 # If both are None, then the gems were not adjacent
-                first_selected_gem = None  # deselect the first gem
+                session.first_selected_gem = None  # deselect the first gem
                 continue
 
             # Show the swap animation on the screen.
-            board_copy = game_board.get_board_copy_minus_gems(
+            board_copy = session.board.get_board_copy_minus_gems(
                 (first_swapping_gem, second_swapping_gem)
             )
             gem_game.animate_moving_gems(
                 board_copy,
                 [first_swapping_gem, second_swapping_gem],
                 [],
-                score,
+                session.score,
             )
 
             assert first_swapping_gem
             assert second_swapping_gem
             # Swap the gems in the board data structure.
-            game_board[first_swapping_gem.x][
+            session.board[first_swapping_gem.x][
                 first_swapping_gem.y
             ] = second_swapping_gem.image_num
-            game_board[second_swapping_gem.x][
+            session.board[second_swapping_gem.x][
                 second_swapping_gem.y
             ] = first_swapping_gem.image_num
 
             # See if this is a matching move.
-            matched_gems = game_board.find_matching_gems()
+            matched_gems = session.board.find_matching_gems()
 
             if not matched_gems:
                 # Was not a matching move; swap the gems back
@@ -669,12 +689,12 @@ def run_game(gem_game: GemGame):
                     board_copy,
                     [first_swapping_gem, second_swapping_gem],
                     [],
-                    score,
+                    session.score,
                 )
-                game_board[first_swapping_gem.x][
+                session.board[first_swapping_gem.x][
                     first_swapping_gem.y
                 ] = second_swapping_gem.image_num
-                game_board[second_swapping_gem.x][
+                session.board[second_swapping_gem.x][
                     second_swapping_gem.y
                 ] = first_swapping_gem.image_num
             else:
@@ -695,7 +715,7 @@ def run_game(gem_game: GemGame):
                         score_add += 10 + (len(gem_set) - 3) * 10
 
                         for gem in gem_set:
-                            game_board[gem[0]][gem[1]] = EMPTY_SPACE
+                            session.board[gem[0]][gem[1]] = EMPTY_SPACE
 
                         if gem:
                             points.append(
@@ -706,31 +726,34 @@ def run_game(gem_game: GemGame):
                                 }
                             )
                     random.choice(gem_game.game_sounds.match).play()
-                    score += score_add
+                    session.score += score_add
 
                     # Drop the new gems.
-                    gem_game.fill_board_and_animate(game_board, points, score)
+                    gem_game.fill_board_and_animate(
+                        session.board, points, session.score
+                    )
 
                     # Check if there are any new matches.
-                    matched_gems = game_board.find_matching_gems()
-            first_selected_gem = None
+                    matched_gems = session.board.find_matching_gems()
 
-            if not game_board.can_make_move():
-                game_is_over = True
+            session.first_selected_gem = None
+            session.end_game_if_stuck()
 
         # Draw the board.
         gem_game.display_surf.fill(BGCOLOR)
-        gem_game.draw_board(game_board)
+        gem_game.draw_board(session.board)
 
-        if first_selected_gem is not None:
-            gem_game.highlight_space(first_selected_gem["x"], first_selected_gem["y"])
+        if session.first_selected_gem is not None:
+            gem_game.highlight_space(
+                session.first_selected_gem["x"], session.first_selected_gem["y"]
+            )
 
-        if game_is_over:
+        if session.game_is_over:
             if click_continue_text_surf is None:
                 # Only render the text once. In future iterations, just
                 # use the Surface object already in clickContinueTextSurf
                 click_continue_text_surf = gem_game.basic_font.render(
-                    f"Final Score: {score} (Click to continue)",
+                    f"Final Score: {session.score} (Click to continue)",
                     1,
                     GAMEOVERCOLOR,
                     GAMEOVERBGCOLOR,
@@ -743,11 +766,12 @@ def run_game(gem_game: GemGame):
             gem_game.display_surf.blit(
                 click_continue_text_surf, click_continue_text_rect
             )
-        elif score > 0 and time.time() - last_score_deduction > DEDUCT_SPEED:
+        elif session.score > 0 and time.time() - last_score_deduction > DEDUCT_SPEED:
             # score drops over time
-            score -= 1
+            session.score -= 1
             last_score_deduction = time.time()
-        gem_game.draw_score(score)
+
+        gem_game.draw_score(session.score)
         pygame.display.update()
         gem_game.fps_clock.tick(FPS)
 
