@@ -35,3 +35,9 @@ prospector --strictness high --with-tool mypy pygame_gem.py
 ## License
 
 Sticking with the original's Simplified BSD License. This repo should have a [LICENSE](./LICENSE) file with the details.
+
+## Assets
+
+I've added images from the [Kenney Animal Pack][kenney-animal] for a little variety.
+
+[kenney-animal]: https://kenney.nl/assets/animal-pack

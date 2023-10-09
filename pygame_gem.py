@@ -17,6 +17,8 @@ with the following keys:
 """
 
 import copy
+import logging
+import os
 import random
 import sys
 import time
@@ -25,6 +27,11 @@ from enum import Enum
 from typing import Sequence
 
 import pygame
+from rich.logging import RichHandler
+
+logging.basicConfig(
+    level="INFO", format="%(message)s", datefmt="[%X]", handlers=[RichHandler()]
+)
 
 FPS = 30  # frames per second to update the screen
 WINDOW_WIDTH = 600  # width of the program's window, in pixels
@@ -409,7 +416,7 @@ class GameSounds:
 class GemGame:
     """Manages drawing the game itself."""
 
-    fps_clock: pygame.time.Clock = field(init=False)
+    fps_clock: pygame.time.Clock = field(init=False, default_factory=pygame.time.Clock)
     display_surf: pygame.Surface = field(init=False)
     basic_font: pygame.font.Font = field(init=False)
     gem_images: list[pygame.Surface] = field(init=False, default_factory=list)
@@ -419,13 +426,20 @@ class GemGame:
 
     def __post_init__(self):
         """Initialize fields."""
-        self.fps_clock = pygame.time.Clock()
         self.display_surf = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
         self.basic_font = pygame.font.Font("freesansbold.ttf", 36)
 
         # Load gem images.
-        for i in range(1, NUM_GEM_IMAGES + 1):
-            gem_image = pygame.image.load(f"gem{i}.png")
+        session_image_files: set[str] = set()
+        available_images = os.listdir("assets/images")
+
+        while len(session_image_files) < NUM_GEM_IMAGES:
+            session_image_files.add(random.choice(available_images))
+
+        logging.info("session image files: %s", session_image_files)
+
+        for image_file in session_image_files:
+            gem_image = pygame.image.load(f"assets/images/{image_file}")
 
             if gem_image.get_size() != (GEM_IMAGE_SIZE, GEM_IMAGE_SIZE):
                 gem_image = pygame.transform.smoothscale(
